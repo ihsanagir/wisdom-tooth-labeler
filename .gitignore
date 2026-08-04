@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.env
+*.egg-info/
+
+# Model dosyaları (büyük — GitHub 100MB limitini aşıyor)
+yolo11n.pt
+yolo11s.pt
+yolov8s.pt
+
+# Tüm eğitilmiş modeller (Railway'e model ayrıca yüklenecek)
+trained_models/
+
+# Veri seti (büyük dosyalar)
+train/
+valid/
+test/
+annotated_images.zip
+backup_original_split/
+
+# Eğitim çıktıları
+runs/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db

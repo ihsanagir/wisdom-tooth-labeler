@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Yapay zeka destekli yirmilik diş karar destek sistemi. Panoramik röntgen görüntülerinden otomatik diş tespiti ve tedavi önerisi.">
+    <title>Akıllı Yirmilik Diş Karar Destek Sistemi</title>
+    <link rel="stylesheet" href="/static/styles.css?v=6">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🦷 Akıllı Yirmilik Diş Karar Destek Sistemi</h1>
+            <p>Yapay zeka ile tespit, otomatik parametre analizi ve tedavi önerisi</p>
+        </header>
+
+        <!-- Main Grid: Image + Patient Profile -->
+        <div class="main-grid">
+            <!-- Left: Image Upload & Detection -->
+            <div class="card">
+                <div class="card-title">
+                    <span class="icon">📷</span> Röntgen Analizi
+                </div>
+
+                <!-- Upload Area -->
+                <div class="upload-area" id="uploadArea">
+                    <span class="upload-icon">🩻</span>
+                    <p class="upload-text">
+                        Röntgen görüntüsünü <strong>sürükle &amp; bırak</strong><br>
+                        veya tıklayarak dosya seç
+                    </p>
+                    <input type="file" id="fileInput" accept="image/*,.dcm">
+                </div>
+
+                <!-- Image Preview -->
+                <div class="image-preview" id="imagePreview">
+                    <img id="previewImg" src="" alt="Röntgen">
+                    <!-- Canvas: sadece bbox'lar çizilir, görüntüye dokunmaz -->
+                    <canvas id="overlayCanvas"></canvas>
+                    <button class="clear-btn" id="clearBtn" title="Temizle">✕</button>
+
+                    <!-- Overlay Badge (analiz yapıldıktan sonra görünür) -->
+                    <div class="overlay-badge" id="overlayBadge">
+                        <span class="overlay-badge-dot"></span>
+                        <span id="overlayBadgeText">Analiz Hazır</span>
+                    </div>
+                </div>
+
+                <!-- Buton Grubu -->
+                <div class="btn-group" id="btnGroup">
+                    <!-- Tespit Butonu -->
+                    <button class="detect-btn" id="detectBtn" disabled>
+                        <span class="spinner" id="spinner"></span>
+                        <span id="detectText">🔍 20'lik Dişleri Analiz Et</span>
+                    </button>
+
+                    <!-- Overlay Toggle Butonu (sadece analiz sonrası görünür) -->
+                    <button class="overlay-toggle-btn" id="overlayToggleBtn" style="display:none;">
+                        <span id="overlayIcon">👁</span>
+                        <span id="overlayText">Tespitleri Göster</span>
+                    </button>
+                </div>
+
+                <!-- Detection Summary -->
+                <div class="detection-summary" id="detectionSummary"></div>
+
+                <!-- Klavye İpucu -->
+                <div class="keyboard-hint" id="keyboardHint" style="display:none;">
+                    <span>⌨ <kbd>Space</kbd> tespit göster/gizle &nbsp;·&nbsp; <kbd>Esc</kbd> temizle</span>
+                </div>
+            </div>
+
+            <!-- Right: Patient Profile -->
+            <div class="card">
+                <div class="card-title">
+                    <span class="icon">👤</span> Hasta Profili
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="gender">Cinsiyet</label>
+                        <select id="gender"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="age">Yaş Aralığı</label>
+                        <select id="age"></select>
+                    </div>
+                </div>
+
+                <div class="form-group full-width">
+                    <label for="mouthOpening">Ağız Açıklığı</label>
+                    <select id="mouthOpening"></select>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Teeth Section -->
+        <div class="teeth-section">
+            <div class="section-title">
+                <span class="icon">🦷</span> Diş Analiz Sonuçları
+            </div>
+
+            <div id="teethContainer">
+                <div class="no-detection-msg" id="noDetection">
+                    Henüz tespit yapılmadı. Röntgen görüntüsü yükleyip <strong>"20'lik Dişleri Analiz Et"</strong> butonuna tıklayın.
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            Akıllı Yirmilik Diş Karar Destek Sistemi — Karar destek aracıdır, klinik karar klinisyene aittir.
+        </footer>
+    </div>
+
+    <script src="/static/app.js?v=6"></script>
+</body>
+</html>

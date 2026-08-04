@@ -1,0 +1,12 @@
+names:
+- Wisdom
+nc: 1
+roboflow:
+  license: CC BY 4.0
+  project: wisdom-teeth-nbnzt-mnmd0
+  url: https://universe.roboflow.com/meyve-eyp6i/wisdom-teeth-nbnzt-mnmd0/dataset/2
+  version: 2
+  workspace: meyve-eyp6i
+test: ../test/images
+train: ../train/images
+val: ../valid/images

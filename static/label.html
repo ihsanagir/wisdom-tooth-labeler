@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Klinik Etiketleme — Yirmilik Diş</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/label.css">
+</head>
+<body>
+    <!-- TOP BAR -->
+    <header class="topbar">
+        <div class="topbar-left">
+            <span class="logo">🦷</span>
+            <span class="title">Klinik Etiketleme</span>
+        </div>
+        <div class="topbar-center">
+            <div class="progress-wrap">
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progressFill"></div>
+                </div>
+                <span class="progress-text" id="progressText">Yükleniyor…</span>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <a href="/" class="nav-link">← Ana Uygulama</a>
+            <button class="stats-btn" id="statsToggle">📊 İstatistik</button>
+        </div>
+    </header>
+
+    <!-- STATS PANEL (overlay) -->
+    <div class="stats-overlay" id="statsOverlay" style="display:none">
+        <div class="stats-card">
+            <div class="stats-header">
+                <h3>Etiket İstatistikleri</h3>
+                <button onclick="closeStats()">✕</button>
+            </div>
+            <div id="statsContent" class="stats-content">Yükleniyor…</div>
+        </div>
+    </div>
+
+    <!-- MAIN LAYOUT -->
+    <main class="layout">
+
+        <!-- LEFT: Image List -->
+        <aside class="sidebar-left">
+            <div class="sidebar-header">
+                <span>Görüntüler</span>
+                <div class="filter-btns">
+                    <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">Tümü</button>
+                    <button class="filter-btn" data-filter="unlabeled" onclick="setFilter('unlabeled',this)">Bekleyen</button>
+                    <button class="filter-btn" data-filter="labeled" onclick="setFilter('labeled',this)">Etiketli</button>
+                </div>
+            </div>
+            <div class="image-list" id="imageList">
+                <div class="list-loading">Görüntüler yükleniyor…</div>
+            </div>
+        </aside>
+
+        <!-- CENTER: Canvas Viewer -->
+        <section class="canvas-panel">
+            <div class="canvas-wrap" id="canvasWrap">
+                <div class="canvas-placeholder" id="canvasPlaceholder">
+                    <span>←</span>
+                    <p>Soldaki listeden bir görüntü seçin</p>
+                </div>
+                <canvas id="labelCanvas" style="display:none"></canvas>
+            </div>
+            <div class="tooth-tabs" id="toothTabs"></div>
+        </section>
+
+        <!-- RIGHT: Classification Form -->
+        <aside class="sidebar-right">
+            <div id="noSelectionMsg" class="no-selection">
+                <p>Bir görüntü seçip<br>diş kutusuna tıklayın</p>
+            </div>
+
+            <div id="labelForm" style="display:none">
+                <div class="form-tooth-title" id="formToothTitle">1. Diş</div>
+                <div class="auto-hint" id="autoHint"></div>
+
+                <!-- GÖMÜLÜLÜK AÇISI -->
+                <div class="field-group">
+                    <div class="field-header">
+                        <label>Gömülülük Açısı</label>
+                        <button class="guide-btn" onclick="toggleGuide('guideImpaction')">?</button>
+                    </div>
+                    <div class="guide-box" id="guideImpaction">
+                        <div class="guide-item"><span class="guide-icon">↕</span><strong>Dikey</strong> — Diş tamamen dik, komşu dişe paralel. En sık gömülü tip.</div>
+                        <div class="guide-item"><span class="guide-icon">↗</span><strong>Mesioangular</strong> — Dişin tacı öne/yukarı eğik. En sık görülen tip, görece kolay çekim.</div>
+                        <div class="guide-item"><span class="guide-icon">↙</span><strong>Distoangular</strong> — Dişin tacı arkaya/ramusa doğru eğik. Çekimi en zor tiplerden biri.</div>
+                        <div class="guide-item"><span class="guide-icon">↔</span><strong>Yatay</strong> — Diş tamamen yatay, komşu dişin köküne baskı yapar.</div>
+                        <div class="guide-item"><span class="guide-icon">↓</span><strong>Ters</strong> — Diş baş aşağı, tacı aşağıda kökü yukarıda. Nadir.</div>
+                    </div>
+                    <div class="radio-group" id="impactionGroup"></div>
+                </div>
+
+                <!-- RAMUS İLİŞKİSİ -->
+                <div class="field-group">
+                    <div class="field-header">
+                        <label>Ramus İlişkisi <small>(Pell-Gregory)</small></label>
+                        <button class="guide-btn" onclick="toggleGuide('guideRamus')">?</button>
+                    </div>
+                    <div class="guide-box" id="guideRamus">
+                        <div class="guide-item"><span class="guide-icon">1</span><strong>Sınıf 1</strong> — Diş tamamen ramus kemiğinin önünde. Erişim kolay.</div>
+                        <div class="guide-item"><span class="guide-icon">2</span><strong>Sınıf 2</strong> — Dişin bir kısmı ramus içinde kalmış. Orta güçlükte.</div>
+                        <div class="guide-item"><span class="guide-icon">3</span><strong>Sınıf 3</strong> — Diş büyük oranda ramus içinde. Çekimi en zor.</div>
+                    </div>
+                    <div class="radio-group" id="ramusGroup"></div>
+                </div>
+
+                <!-- GÖMÜLÜLGİÇ DERİNLİĞİ -->
+                <div class="field-group">
+                    <div class="field-header">
+                        <label>Gömülülük Derinliği <small>(Pell-Gregory)</small></label>
+                        <button class="guide-btn" onclick="toggleGuide('guideDepth')">?</button>
+                    </div>
+                    <div class="guide-box" id="guideDepth">
+                        <div class="guide-item"><span class="guide-icon">A</span><strong>Seviye A</strong> — Dişin tepesi komşu dişin çiğneme yüzeyiyle aynı hizada veya üstünde. Yüzeysel.</div>
+                        <div class="guide-item"><span class="guide-icon">B</span><strong>Seviye B</strong> — Dişin tepesi komşu dişin boynu ile çiğneme yüzeyi arasında. Orta derinlik.</div>
+                        <div class="guide-item"><span class="guide-icon">C</span><strong>Seviye C</strong> — Dişin tepesi komşu dişin boynunun altında. Derin gömülü.</div>
+                    </div>
+                    <div class="radio-group" id="depthGroup"></div>
+                </div>
+
+                <!-- NOTLAR -->
+                <div class="field-group">
+                    <label class="notes-label">Notlar <small>(isteğe bağlı)</small></label>
+                    <textarea id="labelNotes" placeholder="Gördüğünüz klinik özelliği yazabilirsiniz…"></textarea>
+                </div>
+
+                <button class="save-btn" id="saveBtn" onclick="saveCurrentLabel()">
+                    <span id="saveBtnText">💾 Kaydet</span>
+                </button>
+                <div class="save-feedback" id="saveFeedback"></div>
+            </div>
+        </aside>
+    </main>
+
+    <script src="/static/label.js"></script>
+</body>
+</html>
