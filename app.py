@@ -1,8 +1,10 @@
 import io
+import os
 import base64
 import logging
 import webbrowser
 import threading
+from pathlib import Path
 import cv2
 import numpy as np
 from fastapi import FastAPI, UploadFile, File
@@ -40,7 +42,14 @@ except Exception as e:
 app = FastAPI(title="Akıllı Yirmilik Diş Karar Destek Sistemi")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/train-images", StaticFiles(directory="train/images"), name="train-images")
+
+# train/images klasörü varsa mount et (lokal), yoksa Railway'de atla
+_train_images_dir = Path("train/images")
+if _train_images_dir.exists():
+    app.mount("/train-images", StaticFiles(directory="train/images"), name="train-images")
+    logger.info("train/images mount edildi.")
+else:
+    logger.warning("train/images bulunamadı — Railway modunda çalışıyor.")
 
 
 class AnalyzeRequest(BaseModel):
