@@ -32,6 +32,11 @@ from label_storage import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+# Goruntu klasoru: Railway'de /data/images, lokalde train/images
+IMAGES_DIR = Path(os.getenv("IMAGES_DIR", "train/images"))
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+logger.info("Goruntu klasoru: %s", IMAGES_DIR)
+
 model = None
 try:
     model = YOLO(MODEL_PATH)
@@ -43,13 +48,12 @@ app = FastAPI(title="Akıllı Yirmilik Diş Karar Destek Sistemi")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# train/images klasörü varsa mount et (lokal), yoksa Railway'de atla
-_train_images_dir = Path("train/images")
-if _train_images_dir.exists():
-    app.mount("/train-images", StaticFiles(directory="train/images"), name="train-images")
-    logger.info("train/images mount edildi.")
+# Goruntu klasoru varsa mount et
+if IMAGES_DIR.exists() and any(IMAGES_DIR.iterdir()):
+    app.mount("/train-images", StaticFiles(directory=str(IMAGES_DIR)), name="train-images")
+    logger.info("Goruntu klasoru mount edildi: %s", IMAGES_DIR)
 else:
-    logger.warning("train/images bulunamadı — Railway modunda çalışıyor.")
+    logger.warning("Goruntu klasoru bos veya yok: %s", IMAGES_DIR)
 
 
 class AnalyzeRequest(BaseModel):
@@ -212,16 +216,14 @@ async def analyze_tooth(request: AnalyzeRequest):
 
 @app.get("/api/label/images")
 async def list_label_images():
-    from pathlib import Path
-    images_dir = Path("train/images")
-    if not images_dir.exists():
+    if not IMAGES_DIR.exists():
         return {"images": [], "total": 0, "labeled_count": 0}
 
     labeled = get_labeled_image_stems()
     exts = {".jpg", ".jpeg", ".png"}
     images = [
         {"name": f.name, "labeled": f.stem in labeled}
-        for f in sorted(images_dir.iterdir())
+        for f in sorted(IMAGES_DIR.iterdir())
         if f.suffix.lower() in exts
     ]
     return {
@@ -233,8 +235,7 @@ async def list_label_images():
 
 @app.get("/api/label/detect")
 async def detect_for_label(image_name: str):
-    from pathlib import Path
-    image_path = Path("train/images") / image_name
+    image_path = IMAGES_DIR / image_name
     if not image_path.exists():
         return JSONResponse(status_code=404, content={"error": "Görüntü bulunamadı."})
 
@@ -305,6 +306,56 @@ async def get_existing_labels(image_name: str):
 @app.get("/api/label/stats")
 async def label_stats():
     return storage_get_stats()
+
+
+# ─── Admin: Goruntu Yukleme ───────────────────────────────────────────────────
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "wisdom2024admin")
+
+@app.get("/admin")
+async def admin_page():
+    return FileResponse("static/admin.html")
+
+
+@app.post("/api/admin/upload")
+async def upload_images(
+    files: list[UploadFile] = File(...),
+    token: str = ""
+):
+    """Admin: Goruntu yukle (toplu). Token ile korunur."""
+    if token != ADMIN_TOKEN:
+        return JSONResponse(status_code=401, content={"error": "Yetkisiz erisim."})
+
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    saved = []
+    errors = []
+    for f in files:
+        if not f.filename:
+            continue
+        ext = Path(f.filename).suffix.lower()
+        if ext not in {".jpg", ".jpeg", ".png"}:
+            errors.append(f"{f.filename}: desteklenmeyen format")
+            continue
+        dest = IMAGES_DIR / f.filename
+        content = await f.read()
+        dest.write_bytes(content)
+        saved.append(f.filename)
+
+    # Mount'u yenile (ilk yuklemede)
+    if saved and "train-images" not in [r.name for r in app.routes if hasattr(r, 'name')]:
+        from starlette.staticfiles import StaticFiles as SF
+        app.mount("/train-images", SF(directory=str(IMAGES_DIR)), name="train-images")
+
+    return {"saved": len(saved), "errors": errors, "files": saved}
+
+
+@app.get("/api/admin/images")
+async def list_admin_images(token: str = ""):
+    """Admin: Yuklu goruntu listesi."""
+    if token != ADMIN_TOKEN:
+        return JSONResponse(status_code=401, content={"error": "Yetkisiz erisim."})
+    exts = {".jpg", ".jpeg", ".png"}
+    files = [f.name for f in IMAGES_DIR.iterdir() if f.suffix.lower() in exts] if IMAGES_DIR.exists() else []
+    return {"count": len(files), "files": sorted(files)}
 
 
 def open_browser():
