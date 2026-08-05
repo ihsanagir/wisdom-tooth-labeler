@@ -312,8 +312,12 @@ async def label_stats():
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "wisdom2024admin")
 
 @app.get("/admin")
+@app.get("/admin/")
 async def admin_page():
-    return FileResponse("static/admin.html")
+    admin_html_path = Path(__file__).parent / "static" / "admin.html"
+    if not admin_html_path.exists():
+        return JSONResponse(status_code=404, content={"error": "admin.html dosyası bulunamadı."})
+    return FileResponse(str(admin_html_path))
 
 
 @app.post("/api/admin/upload")
