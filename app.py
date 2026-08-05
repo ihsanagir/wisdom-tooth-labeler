@@ -63,9 +63,12 @@ class AnalyzeRequest(BaseModel):
     nerve: str
 
 
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+
 @app.get("/")
 async def serve_frontend():
-    return FileResponse("static/index.html")
+    return RedirectResponse(url="/label")
+
 
 
 @app.get("/label")
