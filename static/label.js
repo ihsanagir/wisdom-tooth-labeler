@@ -149,6 +149,7 @@ async function selectImage(name) {
     selectedIdx  = null;
     detections   = [];
     savedLabels  = {};
+    toggleMobileSidebar(false); // Mobilde sol çekmeceyi otomatik kapat
     renderImageList();
     showLabelForm(false);
     toothTabs.innerHTML = `<span style="color:var(--text-muted);font-size:12px">Yükleniyor…</span>`;
@@ -302,13 +303,28 @@ function drawBboxes() {
 }
 
 function initCanvasEvents() {
-    canvas.addEventListener("mousedown", (e) => {
-        if (!currentImage) return;
+    // Fare Koordinatları
+    const getPos = (e) => {
         const rect = canvas.getBoundingClientRect();
-        const mx = (e.clientX - rect.left) / canvasScale;
-        const my = (e.clientY - rect.top)  / canvasScale;
+        let clientX = e.clientX;
+        let clientY = e.clientY;
+        if (e.touches && e.touches.length > 0) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        }
+        return {
+            x: (clientX - rect.left) / canvasScale,
+            y: (clientY - rect.top)  / canvasScale
+        };
+    };
 
-        // Önce var olan bir kutuya mı tıklandı kontrol et
+    const handleStart = (e) => {
+        if (!currentImage) return;
+        const pos = getPos(e);
+        const mx = pos.x;
+        const my = pos.y;
+
+        // Önce var olan bir kutuya mı tıklandı/dokunuldu kontrol et
         for (const det of detections) {
             const [x1, y1, x2, y2] = det.bbox;
             if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2) {
@@ -323,17 +339,18 @@ function initCanvasEvents() {
         startY = my;
         currentX = mx;
         currentY = my;
-    });
+    };
 
-    canvas.addEventListener("mousemove", (e) => {
+    const handleMove = (e) => {
         if (!isDrawing) return;
-        const rect = canvas.getBoundingClientRect();
-        currentX = (e.clientX - rect.left) / canvasScale;
-        currentY = (e.clientY - rect.top)  / canvasScale;
+        if (e.cancelable) e.preventDefault(); // Mobilde kaydırmayı engelle
+        const pos = getPos(e);
+        currentX = pos.x;
+        currentY = pos.y;
         redrawCanvas();
-    });
+    };
 
-    canvas.addEventListener("mouseup", () => {
+    const handleEnd = () => {
         if (!isDrawing) return;
         isDrawing = false;
 
@@ -362,11 +379,36 @@ function initCanvasEvents() {
         detections.push(newDet);
         renderTabs();
         selectTooth(newIdx);
-    });
+    };
+
+    // Fare Etkinlikleri (Mouse Events)
+    canvas.addEventListener("mousedown", handleStart);
+    canvas.addEventListener("mousemove", handleMove);
+    canvas.addEventListener("mouseup", handleEnd);
+
+    // Dokunmatik Ekran Etkinlikleri (Touch Events for Mobile/Tablet)
+    canvas.addEventListener("touchstart", (e) => {
+        if (isDrawing && e.cancelable) e.preventDefault();
+        handleStart(e);
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", handleMove, { passive: false });
+    canvas.addEventListener("touchend", handleEnd);
+    canvas.addEventListener("touchcancel", handleEnd);
+}
+
+function toggleMobileSidebar(forceState) {
+    const sidebar = $("sidebarLeft");
+    const backdrop = $("sidebarBackdrop");
+    if (!sidebar) return;
+
+    const isOpen = typeof forceState === "boolean" ? forceState : !sidebar.classList.contains("open");
+    sidebar.classList.toggle("open", isOpen);
+    if (backdrop) backdrop.classList.toggle("open", isOpen);
 }
 
 function enableDrawMode() {
-    alert("💡 Fare ile görüntü üzerinde sürükleyerek 20'lik diş kutusunu çizebilirsiniz.");
+    alert("💡 Dokunmatik ekranda parmağınızla veya bilgisayarda fare ile sürükleyerek 20'lik diş kutusu çizebilirsiniz.");
 }
 
 // ============================================================

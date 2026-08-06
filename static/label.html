@@ -12,6 +12,7 @@
     <!-- TOP BAR -->
     <header class="topbar">
         <div class="topbar-left">
+            <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileSidebar()" title="Görüntü Listesini Aç/Kapat">📂 Görüntüler</button>
             <span class="logo">🦷</span>
             <span class="title">20'lik Diş Etiketleme</span>
         </div>
@@ -41,10 +42,11 @@
     </div>
 
     <!-- MAIN LAYOUT -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleMobileSidebar(false)"></div>
     <main class="layout">
 
         <!-- LEFT: Image List -->
-        <aside class="sidebar-left">
+        <aside class="sidebar-left" id="sidebarLeft">
             <div class="sidebar-header">
                 <span>Görüntüler</span>
                 <div class="filter-btns">
