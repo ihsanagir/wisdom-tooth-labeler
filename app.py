@@ -40,8 +40,11 @@ logger.info("Goruntu klasoru: %s", IMAGES_DIR)
 
 model = None
 try:
-    model = YOLO(MODEL_PATH)
-    logger.info("YOLO modeli başarıyla yüklendi: %s", MODEL_PATH)
+    if Path(MODEL_PATH).exists():
+        model = YOLO(MODEL_PATH)
+        logger.info("YOLO modeli başarıyla yüklendi: %s", MODEL_PATH)
+    else:
+        logger.warning("Model dosyası bulunamadı (%s) — sunucu modelsiz (hızlı) modda başlatılıyor.", MODEL_PATH)
 except Exception as e:
     logger.error("Model yüklenemedi: %s", e)
 
