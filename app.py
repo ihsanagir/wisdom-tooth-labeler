@@ -31,6 +31,7 @@ from label_storage import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+logger.info("=== YİRMİLİK DİŞ KARAR DESTEK SİSTEMİ v1.0.2 BAŞLATILDI ===")
 
 # Goruntu klasoru: Railway'de /data/images, lokalde train/images
 IMAGES_DIR = Path(os.getenv("IMAGES_DIR", "train/images"))
