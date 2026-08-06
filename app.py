@@ -314,6 +314,9 @@ ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "wisdom2024admin")
 
 @app.get("/admin")
 @app.get("/admin/")
+@app.get("/ADMIN")
+@app.get("/ADMIN/")
+@app.get("/Admin")
 async def admin_page():
     admin_html_path = Path(__file__).parent / "static" / "admin.html"
     if not admin_html_path.exists():
