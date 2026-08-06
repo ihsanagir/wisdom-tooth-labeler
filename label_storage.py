@@ -7,14 +7,14 @@ Klasör: labels_clinical/
 import json
 import zipfile
 import io
-from pathlib import Path
-from datetime import datetime
+import os
 
-LABELS_DIR = Path("labels_clinical")
+# Kalıcı etiket depolama dizini: Railway Volume için /data/labels_clinical
+LABELS_DIR = Path(os.getenv("LABELS_DIR", "/data/labels_clinical" if Path("/data").exists() else "labels_clinical"))
 
 
 def _ensure_dir():
-    LABELS_DIR.mkdir(exist_ok=True)
+    LABELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _label_file(image_name: str) -> Path:
