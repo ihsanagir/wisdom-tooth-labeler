@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Önbellek Kırma (Docker Layer Cache Invalidation)
+ENV REBUILD_VERSION="v1.1.0_force_refresh"
+
 # Uygulama dosyaları
 COPY . .
 
