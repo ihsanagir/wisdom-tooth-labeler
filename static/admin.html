@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <title>Admin — Görüntü Yükleme</title>
+  <title>Admin Yönetim Paneli</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -21,10 +21,11 @@
       border-radius: 16px;
       padding: 2.5rem;
       width: 100%;
-      max-width: 580px;
+      max-width: 540px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
     }
     h1 { font-size: 1.5rem; margin-bottom: 0.4rem; color: #63b3ed; }
-    p.sub { color: #718096; font-size: 0.9rem; margin-bottom: 2rem; }
+    p.sub { color: #718096; font-size: 0.9rem; margin-bottom: 1.8rem; }
     label { display: block; font-size: 0.85rem; color: #a0aec0; margin-bottom: 0.4rem; }
     input[type="password"], input[type="file"] {
       width: 100%;
@@ -88,42 +89,95 @@
       margin-top: 1rem;
       color: #63b3ed;
     }
+    .protected-section {
+      display: none;
+    }
+    .download-btn {
+      display: block;
+      text-align: center;
+      text-decoration: none;
+      padding: 0.85rem;
+      background: linear-gradient(135deg, #38a169, #276749);
+      border-radius: 8px;
+      color: white;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: opacity 0.2s;
+    }
+    .download-btn:hover { opacity: 0.9; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>🦷 Admin Paneli</h1>
-    <p class="sub">Etiketleme için görüntüleri Railway sunucusuna yükle</p>
+    <h1>🔒 Admin Yönetim Paneli</h1>
+    <p class="sub">Yönetici yetkileri ile görüntü yükleyin veya veri setini indirin</p>
 
-    <label>Admin Şifresi</label>
-    <input type="password" id="token" placeholder="wisdom2024admin" />
-
-    <label>Görüntüler (JPG/PNG — toplu seçim yapabilirsin)</label>
-    <input type="file" id="files" multiple accept=".jpg,.jpeg,.png" />
-
-    <div id="selectedInfo" class="count-badge" style="display:none;margin-bottom:1.2rem;"></div>
-
-    <button id="uploadBtn" onclick="uploadImages()">Yükle</button>
-
-    <div class="progress" id="progress">
-      <div class="progress-bar-wrap">
-        <div class="progress-bar" id="progressBar"></div>
-      </div>
-      <div class="status" id="statusText">Yükleniyor...</div>
+    <!-- ŞİFRE GİRİŞ ALANI -->
+    <div id="authSection">
+      <label for="token">Yönetici Şifresi</label>
+      <input type="password" id="token" placeholder="••••••••••••" onkeyup="if(event.key==='Enter') verifyToken()" />
+      <button id="loginBtn" onclick="verifyToken()">Giriş Yap</button>
+      <div class="result error" id="authError" style="margin-top: 1rem;"></div>
     </div>
 
-    <div class="result" id="result"></div>
+    <!-- ŞİFRE DOĞRULANDIKTAN SONRA AÇILAN KORUMALI ALAN -->
+    <div id="adminPanel" class="protected-section">
+      <hr style="border: 0; border-top: 1px solid #2d3748; margin: 1rem 0 1.5rem 0;">
 
-    <hr style="border: 0; border-top: 1px solid #2d3748; margin: 2rem 0 1.5rem 0;">
+      <h2 style="font-size: 1.1rem; color: #63b3ed; margin-bottom: 0.4rem;">📤 Toplu Görüntü Yükle</h2>
+      <p class="sub" style="margin-bottom: 1rem;">Etiketleme için yeni röntgen görüntüleri ekleyin.</p>
 
-    <h2 style="font-size: 1.1rem; color: #68d391; margin-bottom: 0.4rem;">📦 Veri Setini İndir</h2>
-    <p class="sub" style="margin-bottom: 1rem;">Etiketlenmiş tüm görselleri ve YOLO formatındaki etiket dosyalarını (.txt) ZIP paketi olarak indir.</p>
-    <a href="/api/label/export" download style="display: block; text-align: center; text-decoration: none; padding: 0.85rem; background: linear-gradient(135deg, #38a169, #276749); border-radius: 8px; color: white; font-weight: 600; font-size: 0.95rem; transition: opacity 0.2s;">
-      📥 YOLO Dataset İndir (ZIP)
-    </a>
+      <label>Görüntüler (JPG/PNG — toplu seçim yapabilirsiniz)</label>
+      <input type="file" id="files" multiple accept=".jpg,.jpeg,.png" />
+      <div id="selectedInfo" class="count-badge" style="display:none;margin-bottom:1.2rem;"></div>
+      <button id="uploadBtn" onclick="uploadImages()">Yükle</button>
+
+      <div class="progress" id="progress">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <div class="status" id="statusText">Yükleniyor...</div>
+      </div>
+
+      <div class="result" id="result"></div>
+
+      <hr style="border: 0; border-top: 1px solid #2d3748; margin: 2rem 0 1.5rem 0;">
+
+      <h2 style="font-size: 1.1rem; color: #68d391; margin-bottom: 0.4rem;">📦 Veri Setini İndir</h2>
+      <p class="sub" style="margin-bottom: 1rem;">Etiketlenmiş tüm görselleri ve YOLO formatındaki etiket dosyalarını (.txt) ZIP paketi olarak indirin.</p>
+      <a href="/api/label/export" download class="download-btn">
+        📥 YOLO Dataset İndir (ZIP)
+      </a>
+    </div>
   </div>
 
   <script>
+    async function verifyToken() {
+      const token = document.getElementById('token').value.trim();
+      const authError = document.getElementById('authError');
+      if (!token) {
+        authError.style.display = 'block';
+        authError.textContent = 'Lütfen şifreyi giriniz.';
+        return;
+      }
+
+      // Test amaçlı görüntüler listesini sorgula
+      try {
+        const resp = await fetch(`/api/admin/images?token=${encodeURIComponent(token)}`);
+        if (resp.ok) {
+          authError.style.display = 'none';
+          document.getElementById('authSection').style.display = 'none';
+          document.getElementById('adminPanel').style.display = 'block';
+        } else {
+          authError.style.display = 'block';
+          authError.textContent = 'Hatalı yönetici şifresi!';
+        }
+      } catch (e) {
+        authError.style.display = 'block';
+        authError.textContent = 'Bağlantı hatası: ' + e.message;
+      }
+    }
+
     document.getElementById('files').addEventListener('change', function() {
       const n = this.files.length;
       const info = document.getElementById('selectedInfo');
@@ -198,7 +252,7 @@
       resultEl.style.display = 'block';
       resultEl.innerHTML = `✅ ${totalSaved} görüntü başarıyla yüklendi!` +
         (totalErrors.length ? `<br>⚠️ ${totalErrors.length} hata: ${totalErrors.join(', ')}` : '') +
-        `<br><br><a href="/label" style="color:#68d391">→ Label sayfasına git</a>`;
+        `<br><br><a href="/label" style="color:#68d391">→ Etiketleme sayfasına git</a>`;
     }
   </script>
 </body>
