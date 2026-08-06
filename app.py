@@ -45,7 +45,7 @@ try:
 except Exception as e:
     logger.error("Model yüklenemedi: %s", e)
 
-app = FastAPI(title="Akıllı Yirmilik Diş Karar Destek Sistemi")
+app = FastAPI(title="Akıllı Yirmilik Diş Karar Destek Sistemi v1.1.0", version="1.1.0")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
