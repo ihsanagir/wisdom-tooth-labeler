@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from fastapi import FastAPI, UploadFile, File
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -24,9 +24,11 @@ from image_analyzer import analyze_tooth_automatically
 from post_filter import filter_wisdom_detections
 from label_storage import (
     save_label as storage_save_label,
+    delete_label_box as storage_delete_label_box,
     load_label,
     get_labeled_image_stems,
     get_label_stats as storage_get_stats,
+    export_yolo_dataset,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -293,6 +295,8 @@ class LabelSaveRequest(BaseModel):
     impaction: str
     ramus: str
     depth: str
+    root: str = "Normal/Konik"
+    nerve: str = "Uzak"
     notes: str = ""
 
 
@@ -301,9 +305,32 @@ async def save_label_endpoint(request: LabelSaveRequest):
     """Klinik etiketi JSON olarak kaydeder."""
     result = storage_save_label(
         request.image_name, request.bbox_index, request.bbox,
-        request.impaction, request.ramus, request.depth, request.notes,
+        request.impaction, request.ramus, request.depth,
+        request.root, request.nerve, request.notes,
     )
     return result
+
+
+class DeleteBoxRequest(BaseModel):
+    image_name: str
+    bbox_index: int
+
+
+@app.post("/api/label/delete_box")
+async def delete_box_endpoint(request: DeleteBoxRequest):
+    """Görüntüdeki bir bbox etiketini siler."""
+    return storage_delete_label_box(request.image_name, request.bbox_index)
+
+
+@app.get("/api/label/export")
+async def export_dataset_endpoint():
+    """Tüm etiketlenmiş verileri YOLO formatında ZIP olarak indirir."""
+    zip_buffer = export_yolo_dataset(IMAGES_DIR)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=wisdom_teeth_yolo_dataset.zip"}
+    )
 
 
 @app.get("/api/label/existing")

@@ -24,6 +24,7 @@
             </div>
         </div>
         <div class="topbar-right">
+            <a href="/api/label/export" class="export-btn" title="Etiketlenmiş tüm verileri YOLO formatında ZIP olarak indir">📦 YOLO Dataset İndir</a>
             <a href="/" class="nav-link">← Ana Uygulama</a>
             <button class="stats-btn" id="statsToggle">📊 İstatistik</button>
         </div>
@@ -66,6 +67,10 @@
                     <p>Soldaki listeden bir görüntü seçin</p>
                 </div>
                 <canvas id="labelCanvas" style="display:none"></canvas>
+            </div>
+            <div class="canvas-controls">
+                <button class="tool-btn active" id="btnDrawMode" onclick="enableDrawMode()">➕ Fare İle Kutu Çiz</button>
+                <span class="draw-hint">💡 Görüntü üzerine fare ile sürükleyerek 20'lik diş kutusu çizebilirsiniz.</span>
             </div>
             <div class="tooth-tabs" id="toothTabs"></div>
         </section>
@@ -124,15 +129,36 @@
                     <div class="radio-group" id="depthGroup"></div>
                 </div>
 
+                <!-- KÖK MORFOLOJİSİ -->
+                <div class="field-group">
+                    <div class="field-header">
+                        <label>Kök Morfolojisi</label>
+                    </div>
+                    <div class="radio-group" id="rootGroup"></div>
+                </div>
+
+                <!-- SİNİR İLİŞKİSİ -->
+                <div class="field-group">
+                    <div class="field-header">
+                        <label>İnferior Alveoler Sinir İlişkisi</label>
+                    </div>
+                    <div class="radio-group" id="nerveGroup"></div>
+                </div>
+
                 <!-- NOTLAR -->
                 <div class="field-group">
                     <label class="notes-label">Notlar <small>(isteğe bağlı)</small></label>
                     <textarea id="labelNotes" placeholder="Gördüğünüz klinik özelliği yazabilirsiniz…"></textarea>
                 </div>
 
-                <button class="save-btn" id="saveBtn" onclick="saveCurrentLabel()">
-                    <span id="saveBtnText">💾 Kaydet</span>
-                </button>
+                <div class="action-btn-group">
+                    <button class="save-btn" id="saveBtn" onclick="saveCurrentLabel()">
+                        <span id="saveBtnText">💾 Etiketleri Kaydet</span>
+                    </button>
+                    <button class="delete-box-btn" id="deleteBoxBtn" onclick="deleteCurrentBox()" title="Bu diş kutusunu ve etiketini sil">
+                        🗑 Kutuyu Sil
+                    </button>
+                </div>
                 <div class="save-feedback" id="saveFeedback"></div>
             </div>
         </aside>

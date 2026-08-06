@@ -639,6 +639,82 @@ textarea:focus {
     border-color: var(--accent);
 }
 
+.export-btn {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff;
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    transition: opacity 0.2s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.export-btn:hover {
+    opacity: 0.9;
+}
+
+.canvas-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+}
+
+.tool-btn {
+    background: var(--surface2);
+    border: 1.5px solid var(--accent);
+    color: #3b82f6;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tool-btn.active {
+    background: #3b82f6;
+    color: #fff;
+}
+
+.draw-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.action-btn-group {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.action-btn-group .save-btn {
+    flex: 2;
+    margin-top: 0;
+}
+
+.delete-box-btn {
+    flex: 1;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1.5px solid #ef4444;
+    color: #ef4444;
+    border-radius: 9px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.delete-box-btn:hover {
+    background: #ef4444;
+    color: #fff;
+}
+
 /* ---- SAVE BUTTON ---- */
 .save-btn {
     width: 100%;
