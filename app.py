@@ -47,6 +47,10 @@ except Exception as e:
 
 app = FastAPI(title="Akıllı Yirmilik Diş Karar Destek Sistemi v1.1.0", version="1.1.0")
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Goruntu klasoru varsa mount et
