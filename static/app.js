@@ -178,39 +178,20 @@ function setupUploadHandlers() {
 }
 
 function handleFile(file) {
-    const isDicom = file.name.toLowerCase().endsWith('.dcm');
-    if (!file.type.startsWith('image/') && !isDicom) {
-        alert('Geçerli bir görüntü (.jpg, .png) veya DICOM (.dcm) dosyası seçin.');
+    // Backend yalnızca JPG/PNG çözebiliyor.
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+        alert('Lütfen JPG veya PNG formatında bir röntgen görüntüsü seçin.');
         return;
     }
 
     uploadedFile = file;
     resetOverlayState();
 
-    if (isDicom) {
-        originalImageSrc = null;
-        previewImg.src = '';
-        previewImg.style.display = 'none';
-        let ph = imagePreview.querySelector('.dicom-placeholder');
-        if (!ph) {
-            ph = document.createElement('div');
-            ph.className = 'dicom-placeholder';
-            imagePreview.insertBefore(ph, overlayCanvas);
-        }
-        ph.innerHTML = `<span>🩻</span><p>${escapeHtml(file.name)}</p><small>DICOM dosyası hazır</small>`;
-        imagePreview.style.display = 'block';
-        uploadArea.style.display = 'none';
-        detectBtn.disabled = false;
-        return;
-    }
-
     const reader = new FileReader();
     reader.onload = (e) => {
         originalImageSrc = e.target.result;
         previewImg.src = originalImageSrc;
         previewImg.style.display = 'block';
-        const ph = imagePreview.querySelector('.dicom-placeholder');
-        if (ph) ph.remove();
         imagePreview.style.display = 'block';
         uploadArea.style.display = 'none';
         detectBtn.disabled = false;
@@ -227,9 +208,6 @@ function clearImage() {
     previewImg.src = '';
     previewImg.style.display = 'none';
     clearCanvas();
-
-    const ph = imagePreview.querySelector('.dicom-placeholder');
-    if (ph) ph.remove();
 
     imagePreview.style.display = 'none';
     uploadArea.style.display = 'block';

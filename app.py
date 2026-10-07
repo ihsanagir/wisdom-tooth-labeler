@@ -1,19 +1,20 @@
-import io
 import os
 import base64
+import binascii
 import logging
+import secrets
 import webbrowser
 import threading
 from pathlib import Path
 import cv2
 import numpy as np
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Header, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-from config import MODEL_PATH, CONFIDENCE_THRESHOLD, MAX_DETECTIONS, HOST, PORT
+from config import MODEL_PATH, CONFIDENCE_THRESHOLD, MAX_DETECTIONS, HOST, PORT, APP_VERSION
 from config import (
     GENDER_OPTIONS, AGE_OPTIONS, MOUTH_OPENING_OPTIONS,
     IMPACTION_OPTIONS, RAMUS_OPTIONS, DEPTH_OPTIONS,
@@ -33,12 +34,27 @@ from label_storage import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
-logger.info("=== YİRMİLİK DİŞ KARAR DESTEK SİSTEMİ v1.0.2 BAŞLATILDI ===")
+logger.info("=== YİRMİLİK DİŞ KARAR DESTEK SİSTEMİ v%s BAŞLATILDI ===", APP_VERSION)
 
 # Goruntu klasoru: Railway'de /data/images, lokalde train/images
 IMAGES_DIR = Path(os.getenv("IMAGES_DIR", "train/images"))
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 logger.info("Goruntu klasoru: %s", IMAGES_DIR)
+
+ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "20")) * 1024 * 1024
+
+# --- Erişim Kontrolü ---
+# APP_USER + APP_PASSWORD tanımlıysa tüm site HTTP Basic Auth ile korunur.
+APP_USER = os.getenv("APP_USER", "")
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+# ADMIN_TOKEN tanımlı değilse admin işlemleri (yükleme/export) tamamen kapalıdır.
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+
+if not (APP_USER and APP_PASSWORD):
+    logger.warning("APP_USER/APP_PASSWORD tanımlı değil — site şifresiz çalışıyor (sadece lokal geliştirme için uygun).")
+if not ADMIN_TOKEN:
+    logger.warning("ADMIN_TOKEN tanımlı değil — admin yükleme ve veri seti export kapalı.")
 
 model = None
 try:
@@ -50,20 +66,63 @@ try:
 except Exception as e:
     logger.error("Model yüklenemedi: %s", e)
 
-app = FastAPI(title="Akıllı Yirmilik Diş Karar Destek Sistemi v1.1.0", version="1.1.0")
+app = FastAPI(title="Akıllı Yirmilik Diş Karar Destek Sistemi", version=APP_VERSION)
+
+
+@app.middleware("http")
+async def basic_auth_middleware(request: Request, call_next):
+    if not (APP_USER and APP_PASSWORD) or request.url.path == "/health":
+        return await call_next(request)
+
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Basic "):
+        try:
+            user, _, password = base64.b64decode(auth[6:]).decode("utf-8").partition(":")
+            if (secrets.compare_digest(user, APP_USER)
+                    and secrets.compare_digest(password, APP_PASSWORD)):
+                return await call_next(request)
+        except (binascii.Error, UnicodeDecodeError):
+            pass
+
+    return Response(
+        status_code=401,
+        content="Yetkisiz erişim.",
+        headers={"WWW-Authenticate": 'Basic realm="Yirmilik Dis", charset="UTF-8"'},
+    )
+
+
+def _check_admin(token: str) -> bool:
+    return bool(ADMIN_TOKEN) and secrets.compare_digest(token or "", ADMIN_TOKEN)
+
+
+def _safe_image_path(image_name: str):
+    """IMAGES_DIR dışına çıkan (../) veya desteklenmeyen dosya adlarını reddeder."""
+    if not image_name or Path(image_name).name != image_name:
+        return None
+    if Path(image_name).suffix.lower() not in ALLOWED_IMAGE_EXTS:
+        return None
+    return IMAGES_DIR / image_name
+
+
+def _run_model(image):
+    """YOLO çıkarımı — güvene göre azalan sırada [(xyxy, conf), ...] döndürür."""
+    results = model(image, conf=CONFIDENCE_THRESHOLD, verbose=False)
+    all_boxes = []
+    for result in results:
+        boxes = result.boxes.xyxy.cpu().numpy()
+        confs = result.boxes.conf.cpu().numpy()
+        for box, conf in zip(boxes, confs):
+            all_boxes.append((box, float(conf)))
+    all_boxes.sort(key=lambda x: x[1], reverse=True)
+    return all_boxes
+
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "model_loaded": model is not None, "version": APP_VERSION}
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Goruntu klasoru varsa mount et
-if IMAGES_DIR.exists() and any(IMAGES_DIR.iterdir()):
-    app.mount("/train-images", StaticFiles(directory=str(IMAGES_DIR)), name="train-images")
-    logger.info("Goruntu klasoru mount edildi: %s", IMAGES_DIR)
-else:
-    logger.warning("Goruntu klasoru bos veya yok: %s", IMAGES_DIR)
+app.mount("/train-images", StaticFiles(directory=str(IMAGES_DIR)), name="train-images")
 
 
 class AnalyzeRequest(BaseModel):
@@ -77,12 +136,9 @@ class AnalyzeRequest(BaseModel):
     nerve: str
 
 
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-
 @app.get("/")
 async def serve_frontend():
     return FileResponse("static/index.html")
-
 
 
 @app.get("/label")
@@ -104,68 +160,49 @@ async def get_options():
     }
 
 
+# Model çıkarımı CPU'yu bloke ettiği için bu endpoint'ler bilerek `def` (async değil):
+# FastAPI bunları thread pool'da çalıştırır ve event loop kilitlenmez.
 @app.post("/api/detect")
-async def detect_teeth(file: UploadFile = File(...)):
+def detect_teeth(file: UploadFile = File(...)):
     if model is None:
         return JSONResponse(
             status_code=503,
             content={"error": "Model yüklenemedi. Lütfen model dosyasını kontrol edin."}
         )
 
-    contents = await file.read()
+    contents = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(contents) > MAX_UPLOAD_BYTES:
+        return JSONResponse(status_code=413, content={"error": "Dosya çok büyük."})
+
     nparr = np.frombuffer(contents, np.uint8)
     image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
     if image is None:
         return JSONResponse(
             status_code=400,
-            content={"error": "Geçersiz görüntü dosyası."}
+            content={"error": "Geçersiz görüntü dosyası (JPG veya PNG yükleyin)."}
         )
 
     img_h, img_w = image.shape[:2]
-
-    results = model(image, conf=CONFIDENCE_THRESHOLD)
-    annotated_image = image.copy()
-    raw_detections = []
-
-    all_boxes = []
-    for result in results:
-        boxes = result.boxes.xyxy.cpu().numpy()
-        confs = result.boxes.conf.cpu().numpy()
-        for box, conf in zip(boxes, confs):
-            all_boxes.append((box, float(conf)))
-
-    all_boxes.sort(key=lambda x: x[1], reverse=True)
-
-    # Tüm bbox'ları topla (cross-reference için)
+    all_boxes = _run_model(image)
     all_bbox_list = [box for box, _ in all_boxes]
 
-    for i, (box, conf) in enumerate(all_boxes):
-        if i >= MAX_DETECTIONS:
-            break
-
-        x1, y1, x2, y2 = map(int, box)
-
-        auto_result = analyze_tooth_automatically(box, image, all_bboxes=all_bbox_list)
-
-        raw_detections.append({
+    raw_detections = [
+        {
             "index": i + 1,
             "confidence": round(conf, 4),
-            "bbox": [x1, y1, x2, y2],
-            "auto_analysis": {
-                "impaction": auto_result.get("impaction", "Dikey (Vertical)"),
-                "impaction_confidence": auto_result.get("impaction_confidence", 0.5),
-                "ramus": auto_result.get("ramus", "Sınıf 1 (Önünde)"),
-                "ramus_confidence": auto_result.get("ramus_confidence", 0.5),
-                "depth": auto_result.get("depth", "Seviye A (Oklüzal)"),
-                "depth_confidence": auto_result.get("depth_confidence", 0.5),
-                "angle_value": auto_result.get("angle_value", 0),
-            },
-        })
+            "bbox": list(map(int, box)),
+            "_rank": i,
+        }
+        for i, (box, conf) in enumerate(all_boxes)
+    ]
 
+    # Önce anatomik filtre, sonra limit: aksi halde filtre bir tespiti atınca
+    # sıradaki gerçek diş listeye hiç giremiyordu.
     filtered_detections, removed_detections = filter_wisdom_detections(
         raw_detections, img_w, img_h
     )
+    filtered_detections = filtered_detections[:MAX_DETECTIONS]
 
     if removed_detections:
         logger.info(
@@ -175,25 +212,19 @@ async def detect_teeth(file: UploadFile = File(...)):
         )
 
     for det in filtered_detections:
-        x1, y1, x2, y2 = det["bbox"]
-        conf = det["confidence"]
+        auto_result = analyze_tooth_automatically(all_boxes[det["_rank"]][0], image, all_bboxes=all_bbox_list)
+        det["auto_analysis"] = {
+            "impaction": auto_result.get("impaction", "Dikey (Vertical)"),
+            "impaction_confidence": auto_result.get("impaction_confidence", 0.5),
+            "ramus": auto_result.get("ramus", "Sınıf 1 (Önünde)"),
+            "ramus_confidence": auto_result.get("ramus_confidence", 0.5),
+            "depth": auto_result.get("depth", "Seviye A (Oklüzal)"),
+            "depth_confidence": auto_result.get("depth_confidence", 0.5),
+            "angle_value": auto_result.get("angle_value", 0),
+        }
 
-        if conf >= 0.75:
-            color = (0, 200, 100)
-        elif conf >= 0.55:
-            color = (0, 180, 255)
-        else:
-            color = (0, 100, 255)
-
-        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 1)
-        label = f"{det['index']}.Dis"
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
-        cv2.rectangle(annotated_image, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
-        cv2.putText(annotated_image, label, (x1 + 2, y1 - 3),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1)
-
-    _, buffer = cv2.imencode(".jpg", annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-    img_base64 = base64.b64encode(buffer).decode("utf-8")
+    for det in raw_detections:
+        det.pop("_rank", None)
 
     logger.info(
         "Tespit tamamlandı: %d ham → %d filtrelenmiş diş.",
@@ -201,7 +232,6 @@ async def detect_teeth(file: UploadFile = File(...)):
     )
 
     return {
-        "annotated_image": f"data:image/jpeg;base64,{img_base64}",
         "detections": filtered_detections,
         "count": len(filtered_detections),
         "raw_count": len(raw_detections),
@@ -230,11 +260,10 @@ async def list_label_images():
         return {"images": [], "total": 0, "labeled_count": 0}
 
     labeled = get_labeled_image_stems()
-    exts = {".jpg", ".jpeg", ".png"}
     images = [
         {"name": f.name, "labeled": f.stem in labeled}
         for f in sorted(IMAGES_DIR.iterdir())
-        if f.suffix.lower() in exts
+        if f.suffix.lower() in ALLOWED_IMAGE_EXTS
     ]
     return {
         "images": images,
@@ -244,9 +273,9 @@ async def list_label_images():
 
 
 @app.get("/api/label/detect")
-async def detect_for_label(image_name: str):
-    image_path = IMAGES_DIR / image_name
-    if not image_path.exists():
+def detect_for_label(image_name: str):
+    image_path = _safe_image_path(image_name)
+    if image_path is None or not image_path.exists():
         return JSONResponse(status_code=404, content={"error": "Görüntü bulunamadı."})
 
     image = cv2.imread(str(image_path))
@@ -257,15 +286,7 @@ async def detect_for_label(image_name: str):
         return JSONResponse(status_code=503, content={"error": "Model yüklenemedi."})
 
     img_h, img_w = image.shape[:2]
-    results = model(image, conf=CONFIDENCE_THRESHOLD)
-    all_boxes = []
-    for result in results:
-        boxes = result.boxes.xyxy.cpu().numpy()
-        confs = result.boxes.conf.cpu().numpy()
-        for box, conf in zip(boxes, confs):
-            all_boxes.append((box, float(conf)))
-
-    all_boxes.sort(key=lambda x: x[1], reverse=True)
+    all_boxes = _run_model(image)
     all_bbox_list = [box for box, _ in all_boxes]
 
     detections = []
@@ -303,6 +324,8 @@ class LabelSaveRequest(BaseModel):
 @app.post("/api/label/save")
 async def save_label_endpoint(request: LabelSaveRequest):
     """Klinik etiketi JSON olarak kaydeder."""
+    if _safe_image_path(request.image_name) is None:
+        return JSONResponse(status_code=400, content={"error": "Geçersiz görüntü adı."})
     result = storage_save_label(
         request.image_name, request.bbox_index, request.bbox,
         request.impaction, request.ramus, request.depth,
@@ -319,12 +342,16 @@ class DeleteBoxRequest(BaseModel):
 @app.post("/api/label/delete_box")
 async def delete_box_endpoint(request: DeleteBoxRequest):
     """Görüntüdeki bir bbox etiketini siler."""
+    if _safe_image_path(request.image_name) is None:
+        return JSONResponse(status_code=400, content={"error": "Geçersiz görüntü adı."})
     return storage_delete_label_box(request.image_name, request.bbox_index)
 
 
 @app.get("/api/label/export")
-async def export_dataset_endpoint():
-    """Tüm etiketlenmiş verileri YOLO formatında ZIP olarak indirir."""
+def export_dataset_endpoint(x_admin_token: str = Header(default="")):
+    """Tüm etiketlenmiş verileri YOLO formatında ZIP olarak indirir (admin)."""
+    if not _check_admin(x_admin_token):
+        return JSONResponse(status_code=401, content={"error": "Yetkisiz erisim."})
     zip_buffer = export_yolo_dataset(IMAGES_DIR)
     return StreamingResponse(
         zip_buffer,
@@ -344,13 +371,8 @@ async def label_stats():
 
 
 # ─── Admin: Goruntu Yukleme ───────────────────────────────────────────────────
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "wisdom2024admin")
 
 @app.get("/admin")
-@app.get("/admin/")
-@app.get("/ADMIN")
-@app.get("/ADMIN/")
-@app.get("/Admin")
 async def admin_page():
     admin_html_path = Path(__file__).parent / "static" / "admin.html"
     if not admin_html_path.exists():
@@ -361,10 +383,10 @@ async def admin_page():
 @app.post("/api/admin/upload")
 async def upload_images(
     files: list[UploadFile] = File(...),
-    token: str = ""
+    x_admin_token: str = Header(default=""),
 ):
     """Admin: Goruntu yukle (toplu). Token ile korunur."""
-    if token != ADMIN_TOKEN:
+    if not _check_admin(x_admin_token):
         return JSONResponse(status_code=401, content={"error": "Yetkisiz erisim."})
 
     IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -373,37 +395,37 @@ async def upload_images(
     for f in files:
         if not f.filename:
             continue
-        ext = Path(f.filename).suffix.lower()
-        if ext not in {".jpg", ".jpeg", ".png"}:
-            errors.append(f"{f.filename}: desteklenmeyen format")
+        # Tarayıcının gönderdiği yol kısımlarını at: "../x.jpg" → "x.jpg"
+        name = Path(f.filename.replace("\\", "/")).name
+        if Path(name).suffix.lower() not in ALLOWED_IMAGE_EXTS:
+            errors.append(f"{name}: desteklenmeyen format")
             continue
-        dest = IMAGES_DIR / f.filename
-        content = await f.read()
-        dest.write_bytes(content)
-        saved.append(f.filename)
-
-    # Mount'u yenile (ilk yuklemede)
-    if saved and "train-images" not in [r.name for r in app.routes if hasattr(r, 'name')]:
-        from starlette.staticfiles import StaticFiles as SF
-        app.mount("/train-images", SF(directory=str(IMAGES_DIR)), name="train-images")
+        content = await f.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            errors.append(f"{name}: dosya çok büyük")
+            continue
+        if cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE) is None:
+            errors.append(f"{name}: geçersiz görüntü")
+            continue
+        (IMAGES_DIR / name).write_bytes(content)
+        saved.append(name)
 
     return {"saved": len(saved), "errors": errors, "files": saved}
 
 
 @app.get("/api/admin/images")
-async def list_admin_images(token: str = ""):
+async def list_admin_images(x_admin_token: str = Header(default="")):
     """Admin: Yuklu goruntu listesi."""
-    if token != ADMIN_TOKEN:
+    if not _check_admin(x_admin_token):
         return JSONResponse(status_code=401, content={"error": "Yetkisiz erisim."})
-    exts = {".jpg", ".jpeg", ".png"}
-    files = [f.name for f in IMAGES_DIR.iterdir() if f.suffix.lower() in exts] if IMAGES_DIR.exists() else []
+    files = [f.name for f in IMAGES_DIR.iterdir() if f.suffix.lower() in ALLOWED_IMAGE_EXTS] if IMAGES_DIR.exists() else []
     return {"count": len(files), "files": sorted(files)}
 
 
 def open_browser():
     import time
     time.sleep(1.5)
-    url = f"http://{HOST}:{PORT}"
+    url = f"http://localhost:{PORT}"
     webbrowser.open(url)
     logger.info("Tarayıcı açıldı: %s", url)
 
@@ -413,11 +435,10 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 55)
     print("  🦷 Akıllı Yirmilik Diş Karar Destek Sistemi")
-    print(f"  Adres: http://{HOST}:{PORT}")
+    print(f"  Adres: http://localhost:{PORT}")
     print("  Durdurmak için: Ctrl+C")
     print("=" * 55 + "\n")
 
     threading.Thread(target=open_browser, daemon=True).start()
 
     uvicorn.run(app, host=HOST, port=PORT)
-

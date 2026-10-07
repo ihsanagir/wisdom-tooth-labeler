@@ -131,10 +131,13 @@ function renderImageList() {
     items.forEach(img => {
         const div = document.createElement("div");
         div.className = "img-item" + (img.name === currentImage ? " active" : "");
-        div.innerHTML = `
-            <span class="img-dot ${img.labeled ? "labeled" : "unlabeled"}"></span>
-            <span class="img-name" title="${img.name}">${img.name}</span>
-        `;
+        const dot = document.createElement("span");
+        dot.className = "img-dot " + (img.labeled ? "labeled" : "unlabeled");
+        const nameEl = document.createElement("span");
+        nameEl.className = "img-name";
+        nameEl.title = img.name;
+        nameEl.textContent = img.name;
+        div.append(dot, nameEl);
         div.onclick = () => selectImage(img.name);
         imageList.appendChild(div);
     });

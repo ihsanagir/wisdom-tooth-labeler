@@ -145,7 +145,7 @@
 
       <h2 style="font-size: 1.1rem; color: #68d391; margin-bottom: 0.4rem;">📦 Veri Setini İndir</h2>
       <p class="sub" style="margin-bottom: 1rem;">Etiketlenmiş tüm görselleri ve YOLO formatındaki etiket dosyalarını (.txt) ZIP paketi olarak indirin.</p>
-      <a href="/api/label/export" download class="download-btn">
+      <a href="#" onclick="downloadDataset(event)" class="download-btn">
         📥 YOLO Dataset İndir (ZIP)
       </a>
     </div>
@@ -163,7 +163,7 @@
 
       // Test amaçlı görüntüler listesini sorgula
       try {
-        const resp = await fetch(`/api/admin/images?token=${encodeURIComponent(token)}`);
+        const resp = await fetch('/api/admin/images', { headers: { 'X-Admin-Token': token } });
         if (resp.ok) {
           authError.style.display = 'none';
           document.getElementById('authSection').style.display = 'none';
@@ -188,6 +188,25 @@
         info.style.display = 'none';
       }
     });
+
+    async function downloadDataset(event) {
+      event.preventDefault();
+      const token = document.getElementById('token').value.trim();
+      const resp = await fetch('/api/label/export', { headers: { 'X-Admin-Token': token } });
+      if (!resp.ok) { alert('İndirme başarısız (yetki?).'); return; }
+      const url = URL.createObjectURL(await resp.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'wisdom_teeth_yolo_dataset.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
 
     async function uploadImages() {
       const token = document.getElementById('token').value.trim();
@@ -216,8 +235,9 @@
         batch.forEach(f => formData.append('files', f));
 
         try {
-          const resp = await fetch(`/api/admin/upload?token=${encodeURIComponent(token)}`, {
+          const resp = await fetch('/api/admin/upload', {
             method: 'POST',
+            headers: { 'X-Admin-Token': token },
             body: formData,
           });
           const data = await resp.json();
@@ -251,7 +271,7 @@
       resultEl.className = 'result success';
       resultEl.style.display = 'block';
       resultEl.innerHTML = `✅ ${totalSaved} görüntü başarıyla yüklendi!` +
-        (totalErrors.length ? `<br>⚠️ ${totalErrors.length} hata: ${totalErrors.join(', ')}` : '') +
+        (totalErrors.length ? `<br>⚠️ ${totalErrors.length} hata: ${escapeHtml(totalErrors.join(', '))}` : '') +
         `<br><br><a href="/label" style="color:#68d391">→ Etiketleme sayfasına git</a>`;
     }
   </script>

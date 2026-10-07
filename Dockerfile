@@ -13,12 +13,12 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+# PyTorch'un CPU sürümü (CUDA'lı sürüm imajı birkaç GB büyütür, sunucuda GPU yok)
+RUN pip install --no-cache-dir torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cpu
+
 # Python bağımlılıkları
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Önbellek Kırma
-ENV REBUILD_VERSION="v1.1.2_fix_shell_port"
 
 # Uygulama dosyaları
 COPY . .

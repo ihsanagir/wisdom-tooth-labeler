@@ -31,3 +31,7 @@ runs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Sızıntısız yeni veri bölmesi (veri_bol.py yeniden üretir)
+dataset_v2/
+data_v2.yaml

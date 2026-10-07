@@ -3,9 +3,12 @@ Akıllı Yirmilik Diş Karar Destek Sistemi — Konfigürasyon
 """
 import os
 
+APP_VERSION = "1.2.0"
+
 # --- Model Ayarları ---
-# Yeni eğitim sonrası: "trained_models/disprojesi4/weights/best.pt" olarak güncellenecek
-MODEL_PATH = "trained_models/disprojesi3/weights/best.pt"
+# disprojesi2/3 train==valid olan bölmeyle eğitildi (metrikleri şişik) → kullanılmamalı.
+# Sızıntısız yeniden eğitim tamamlanınca buradaki yol güncellenecek.
+MODEL_PATH = os.getenv("MODEL_PATH", "trained_models/disprojesi52/weights/best.pt")
 CONFIDENCE_THRESHOLD = 0.35  # 0.30 → 0.35 (post-filter ile birlikte daha dengeli)
 MAX_DETECTIONS = 4  # Maksimum tespit edilecek diş sayısı (post-filter de ayrıca sınırlar)
 

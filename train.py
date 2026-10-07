@@ -2,6 +2,10 @@
 import torch
 from ultralytics import YOLO
 
+# veri_bol.py ile üretilen sızıntısız (grup bazlı) bölme
+DATA_YAML = "data_v2.yaml"
+RUN_NAME = "disprojesi6"
+
 
 def main():
     if torch.cuda.is_available():
@@ -15,13 +19,13 @@ def main():
     model = YOLO("yolo11s.pt")
 
     results = model.train(
-        data="data.yaml",
+        data=DATA_YAML,
 
         epochs=150,
         patience=40,
         imgsz=896,
         batch=4,
-        name="disprojesi5",
+        name=RUN_NAME,
         project="trained_models",
         device=0,
 
@@ -70,9 +74,20 @@ def main():
         exist_ok=False,
     )
 
+    best_path = f"trained_models/{RUN_NAME}/weights/best.pt"
     print("\nEgitim tamamlandi!")
-    print("Sonuclar: trained_models/disprojesi5/")
-    print("En iyi model: trained_models/disprojesi5/weights/best.pt")
+    print(f"En iyi model: {best_path}")
+
+    # Model seçiminde hiç kullanılmamış test setinde nihai, dürüst ölçüm
+    test_metrics = YOLO(best_path).val(
+        data=DATA_YAML, split="test", imgsz=896, batch=4,
+        project="trained_models", name=f"{RUN_NAME}_test",
+    )
+    print("\n=== TEST SETI SONUCLARI ===")
+    print(f"Precision : {test_metrics.box.mp:.3f}")
+    print(f"Recall    : {test_metrics.box.mr:.3f}")
+    print(f"mAP50     : {test_metrics.box.map50:.3f}")
+    print(f"mAP50-95  : {test_metrics.box.map:.3f}")
 
 
 if __name__ == "__main__":
