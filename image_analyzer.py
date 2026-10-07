@@ -1,8 +1,18 @@
+"""
+Akıllı Yirmilik Diş Karar Destek Sistemi — Sezgisel Görüntü Analizi
+
+Model yalnızca yirmilik dişin kutusunu verdiği için buradaki sınıflamalar
+görüntü işleme tabanlı *tahminlerdir*; hekim onayı gerekir. Bilinen sınırlar:
+  - Winter açısı 2. molar ekseni yerine görüntü dikeyine göre ölçülür.
+  - Kron ucu mine parlaklığından bulunur; belirsizse kronun oklüzal tarafta olduğu varsayılır.
+  - Oklüzal düzlem, dişin mesialindeki dişlemler arası koyu boşluktan tahmin edilir.
+"""
+
+import logging
+import math
 
 import cv2
 import numpy as np
-import math
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -10,12 +20,22 @@ logger = logging.getLogger(__name__)
 # SABİTLER
 # ========================================================================
 
-# Açı sınıflandırma eşikleri (derece — dikey eksene göre)
-ANGLE_VERTICAL_MIN = 70
-ANGLE_VERTICAL_MAX = 110
-ANGLE_HORIZONTAL_LOW = 25
-ANGLE_HORIZONTAL_HIGH = 155
-ANGLE_INVERTED_MIN = 120
+JAW_UPPER = "Üst Çene"
+JAW_LOWER = "Alt Çene"
+
+RAMUS_NOT_APPLICABLE = "Uygulanamaz (Üst Çene)"
+
+# Görüntü dikeyinden sapma (derece). Winter: dikey ±10°, yatay 80-100°;
+# 2. molar ekseni yerine görüntü dikeyi kullanıldığı için biraz geniş tutuldu.
+TILT_VERTICAL_MAX = 15
+TILT_HORIZONTAL_MIN = 75
+TILT_HORIZONTAL_MAX = 150  # bunun ötesi: kron alt çene kenarına / yukarı bakıyor → ters
+# Kron ucunun (mine) kök ucundan en az bu oranda parlak olması gerekir; yoksa
+# kronun oklüzal tarafta olduğu varsayılır.
+ENAMEL_BRIGHTNESS_RATIO = 1.08
+
+# Etiketli verideki üst/alt diş merkezlerinden kalibre edildi (y_c ≈ 0.52 → %91 doğruluk)
+JAW_SPLIT_Y_RATIO = 0.52
 
 # Segmentasyon parametreleri
 CLAHE_CLIP_LIMIT = 3.0
@@ -23,19 +43,15 @@ CLAHE_TILE_SIZE = (8, 8)
 BILATERAL_D = 9
 BILATERAL_SIGMA_COLOR = 75
 BILATERAL_SIGMA_SPACE = 75
-ADAPTIVE_BLOCK_SIZE = 15
-ADAPTIVE_C = 5
-MORPH_KERNEL_SIZE = 3
-MIN_CONTOUR_AREA_RATIO = 0.05  # Bbox alanının minimum %5'i
+MIN_CONTOUR_AREA_RATIO = 0.15  # Kırpılmış ROI alanının minimum %15'i
 
 # Ramus tespiti
-RAMUS_SEARCH_WIDTH_RATIO = 0.15  # Dişin arkasında araştırma genişliği
-SOBEL_KSIZE = 3
-RAMUS_EDGE_THRESHOLD = 0.4  # Sobel sonucu normalize eşiği
+RAMUS_SEARCH_WIDTH_RATIO = 1.2  # Diş genişliğinin katı — distal yönde arama
+RAMUS_EDGE_THRESHOLD = 0.5
 RAMUS_OVERLAP_THRESHOLD_CLASS2 = 0.25  # Dişin %25'i ramus içinde → Sınıf 2
 RAMUS_OVERLAP_THRESHOLD_CLASS3 = 0.65  # Dişin %65'i ramus içinde → Sınıf 3
 
-# Derinlik tespiti
+# Derinlik (diş yüksekliğine oranla, oklüzal düzlemden uzaklık)
 DEPTH_LEVEL_A_RATIO = 0.15  # Oklüzal düzleme çok yakın
 DEPTH_LEVEL_B_RATIO = 0.40  # Oklüzal-servikal arası
 
@@ -52,37 +68,31 @@ def analyze_tooth_automatically(bbox, image, all_bboxes=None):
         bbox: [x1, y1, x2, y2] — dişin bounding box'ı
         image: numpy array — tam görüntü
         all_bboxes: list of [x1,y1,x2,y2] — tüm tespit edilen dişlerin bbox'ları
-                    (derinlik ve ramus analizi için referans)
 
     Returns:
-        dict: {impaction, impaction_confidence, angle_value,
-               depth, depth_confidence, ramus, ramus_confidence}
+        dict: {jaw, jaw_confidence, impaction, impaction_confidence, angle_value,
+               depth, depth_confidence, ramus, ramus_confidence,
+               tooth_axis, occlusal_y}
     """
     x1, y1, x2, y2 = map(int, bbox)
     img_h, img_w = image.shape[:2]
+    bbox = [x1, y1, x2, y2]
 
-    # Gri tonlama
-    if len(image.shape) == 3:
-        gray_full = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    others = [list(map(int, b)) for b in (all_bboxes or []) if not _same_box(b, bbox)]
+
+    jaw, jaw_conf = detect_jaw(bbox, others, img_w, img_h)
+    impaction, angle_val, angle_conf, axis = detect_tooth_angle(bbox, gray, img_w, jaw)
+    depth, depth_conf, occlusal_y = detect_depth_level(bbox, gray, img_w, img_h, jaw, others)
+
+    if jaw == JAW_UPPER:
+        ramus, ramus_conf = RAMUS_NOT_APPLICABLE, jaw_conf
     else:
-        gray_full = image.copy()
-
-    # --- Açı Tespiti ---
-    impaction, angle_val, angle_conf = detect_tooth_angle(
-        [x1, y1, x2, y2], gray_full, img_w, img_h
-    )
-
-    # --- Derinlik Tespiti ---
-    depth, depth_conf = detect_depth_level(
-        [x1, y1, x2, y2], gray_full, img_h, all_bboxes
-    )
-
-    # --- Ramus İlişkisi ---
-    ramus, ramus_conf = detect_ramus_relation(
-        [x1, y1, x2, y2], gray_full, img_w, img_h
-    )
+        ramus, ramus_conf = detect_ramus_relation(bbox, gray, img_w, img_h)
 
     return {
+        "jaw": jaw,
+        "jaw_confidence": round(jaw_conf, 2),
         "impaction": impaction,
         "impaction_confidence": round(angle_conf, 2),
         "angle_value": round(angle_val, 1),
@@ -90,530 +100,325 @@ def analyze_tooth_automatically(bbox, image, all_bboxes=None):
         "depth_confidence": round(depth_conf, 2),
         "ramus": ramus,
         "ramus_confidence": round(ramus_conf, 2),
+        "tooth_axis": axis,
+        "occlusal_y": occlusal_y,
     }
 
 
+def _same_box(a, b):
+    return all(abs(int(p) - int(q)) < 3 for p, q in zip(a, b))
+
+
+def _is_left(bbox, img_w):
+    return (bbox[0] + bbox[2]) / 2 < img_w / 2
+
+
 # ========================================================================
-# GÖMÜLÜLGİÇ AÇISI TESPİTİ
+# ÇENE (ÜST / ALT) TESPİTİ
 # ========================================================================
 
-def detect_tooth_angle(bbox, gray, img_w, img_h):
+def detect_jaw(bbox, others, img_w, img_h):
     """
-    Diş kontürünün minAreaRect açısını kullanarak gömülülük açısını belirler.
-
-    Yöntem:
-    1. Bbox'u hafif küçülterek merkezdeki dişe odaklan
-    2. CLAHE + Bilateral Filter ile ön işleme
-    3. Adaptive Threshold ile segmentasyon
-    4. Morfolojik temizleme → en büyük kontür
-    5. minAreaRect → açı
-    6. Bbox aspect ratio ile çapraz doğrulama
-
-    Returns:
-        (sınıf_adı, açı_değeri, güvenilirlik)
+    1. Aynı tarafta dikeyde ayrık başka diş varsa → göreli konum (en güvenilir)
+    2. Karşı tarafta üst+alt çifti varsa → çiftin orta noktası eşik
+    3. Aksi halde sabit oran eşiği (dişin mesialindeki koyu boşluğa bakmak
+       ölçümde daha kötü çıktı: %80 vs %91)
     """
     x1, y1, x2, y2 = bbox
-    bw = x2 - x1
-    bh = y2 - y1
+    cy = (y1 + y2) / 2
+    h = y2 - y1
+    left = _is_left(bbox, img_w)
 
-    if bw <= 0 or bh <= 0:
-        return "Dikey (Vertical)", 90, 0.3
+    same_side = [b for b in others if _is_left(b, img_w) == left]
+    for b in same_side:
+        ocy = (b[1] + b[3]) / 2
+        if abs(ocy - cy) > 0.4 * max(h, b[3] - b[1]):
+            return (JAW_UPPER if cy < ocy else JAW_LOWER), 0.95
 
-    # --- İç bölge kesimi (kenarları %10 kırp — kemik/komşu dişi azalt) ---
-    pad_x = int(bw * 0.10)
-    pad_y = int(bh * 0.08)
-    cx1 = max(0, x1 + pad_x)
-    cy1 = max(0, y1 + pad_y)
-    cx2 = min(img_w, x2 - pad_x)
-    cy2 = min(img_h, y2 - pad_y)
+    other_side = sorted((b for b in others if _is_left(b, img_w) != left),
+                        key=lambda b: (b[1] + b[3]) / 2)
+    if len(other_side) >= 2:
+        top, bottom = other_side[0], other_side[-1]
+        t_cy, b_cy = (top[1] + top[3]) / 2, (bottom[1] + bottom[3]) / 2
+        if b_cy - t_cy > 0.4 * max(top[3] - top[1], bottom[3] - bottom[1]):
+            split = (t_cy + b_cy) / 2
+            return (JAW_UPPER if cy < split else JAW_LOWER), 0.85
 
-    if cx2 - cx1 < 10 or cy2 - cy1 < 10:
-        cx1, cy1, cx2, cy2 = x1, y1, x2, y2
+    return (JAW_UPPER if cy < img_h * JAW_SPLIT_Y_RATIO else JAW_LOWER), 0.6
 
-    roi = gray[cy1:cy2, cx1:cx2]
 
-    if roi.size == 0:
-        return "Dikey (Vertical)", 90, 0.3
+# ========================================================================
+# GÖMÜLÜLÜK AÇISI (WINTER)
+# ========================================================================
 
-    # --- Ön İşleme ---
-    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_SIZE)
-    enhanced = clahe.apply(roi)
+def detect_tooth_angle(bbox, gray, img_w, jaw):
+    """
+    Diş kontürünün PCA ana ekseninden gömülülük açısını belirler.
+
+    Returns:
+        (sınıf_adı, dikeyden_sapma_derece, güvenilirlik, eksen_uç_noktaları)
+        Sapma işareti: + → kron mesiale (ortaya) eğik, − → distale eğik.
+    """
+    x1, y1, x2, y2 = bbox
+    bw, bh = x2 - x1, y2 - y1
+    if bw <= 4 or bh <= 4:
+        return "Dikey (Vertical)", 0.0, 0.3, None
+
+    pad_x, pad_y = int(bw * 0.10), int(bh * 0.08)
+    cx1, cy1 = x1 + pad_x, y1 + pad_y
+    roi = gray[cy1:y2 - pad_y, cx1:x2 - pad_x]
+    if roi.size == 0 or min(roi.shape) < 10:
+        return _angle_from_bbox_ratio(bw, bh)
+
+    enhanced = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_SIZE).apply(roi)
     smoothed = cv2.bilateralFilter(enhanced, BILATERAL_D, BILATERAL_SIGMA_COLOR, BILATERAL_SIGMA_SPACE)
+    mask = _segment_tooth(smoothed)
 
-    # --- Segmentasyon ---
-    tooth_mask = _segment_tooth(smoothed)
-
-    # --- Kontür bulma ---
-    contours, _ = cv2.findContours(tooth_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    min_area = roi.shape[0] * roi.shape[1] * MIN_CONTOUR_AREA_RATIO
+    contours = [c for c in contours if cv2.contourArea(c) > min_area]
     if not contours:
-        # Fallback: Bbox oranına dayalı tahmin
-        return _angle_from_bbox_ratio(bw, bh, x1, x2, img_w)
+        return _angle_from_bbox_ratio(bw, bh)
 
-    # En büyük kontürü seç
-    min_area = (cx2 - cx1) * (cy2 - cy1) * MIN_CONTOUR_AREA_RATIO
-    valid_contours = [c for c in contours if cv2.contourArea(c) > min_area]
+    largest = max(contours, key=cv2.contourArea)
+    filled = np.zeros_like(mask)
+    cv2.drawContours(filled, [largest], -1, 255, -1)
+    ys, xs = np.nonzero(filled)
+    pts = np.column_stack([xs, ys]).astype(np.float64)
+    mean = pts.mean(axis=0)
+    cov = np.cov((pts - mean).T)
+    eigvals, eigvecs = np.linalg.eigh(cov)
+    major = eigvecs[:, 1]
+    elongation = math.sqrt(eigvals[1] / max(eigvals[0], 1e-6))
 
-    if not valid_contours:
-        return _angle_from_bbox_ratio(bw, bh, x1, x2, img_w)
+    # Oklüzal yön (görüntü koordinatında): alt çenede yukarı, üst çenede aşağı
+    occlusal_dir = np.array([0.0, -1.0 if jaw == JAW_LOWER else 1.0])
+    if major @ occlusal_dir < 0:
+        major = -major  # varsayılan: kron oklüzal tarafta
 
-    largest_contour = max(valid_contours, key=cv2.contourArea)
+    # Mine en radyoopak dokudur: eksenin öbür ucu belirgin şekilde daha parlaksa kron oradadır
+    proj = (pts - mean) @ major
+    vals = smoothed[ys, xs].astype(np.float64)
+    span = proj.max() - proj.min()
+    crown_end = vals[proj > proj.max() - span * 0.3].mean()
+    root_end = vals[proj < proj.min() + span * 0.3].mean()
+    enamel_flipped = root_end > crown_end * ENAMEL_BRIGHTNESS_RATIO
+    if enamel_flipped:
+        major = -major
+        crown_end, root_end = root_end, crown_end
 
-    # --- minAreaRect ile açı ---
-    if len(largest_contour) < 5:
-        return _angle_from_bbox_ratio(bw, bh, x1, x2, img_w)
+    # Kron yönünün oklüzal yönden sapması; + → mesiale (görüntü ortasına) doğru
+    mesial_sign = 1.0 if _is_left(bbox, img_w) else -1.0
+    cos_a = float(np.clip(major @ occlusal_dir, -1.0, 1.0))
+    side = mesial_sign * major[0]
+    mesial_tilt = math.degrees(math.acos(cos_a)) * (1.0 if side >= 0 else -1.0)
 
-    rect = cv2.minAreaRect(largest_contour)
-    rect_w, rect_h = rect[1]
-    rect_angle = rect[2]  # -90 ile 0 arası
+    classification = _classify_tilt(mesial_tilt)
 
-    # minAreaRect açısını normalize et
-    # OpenCV4: uzun kenar her zaman width, açı -90..0
-    # Amacımız: dişin dikey eksene göre açısını bulmak (0°=yatay, 90°=dikey)
-    if rect_w < rect_h:
-        # Uzun kenar dikey
-        tooth_angle = abs(rect_angle)  # 0'a yakınsa → dikey
-    else:
-        # Uzun kenar yatay
-        tooth_angle = 90 + rect_angle  # Saat yönünde çevirme
+    # Güvenilirlik: dişin ne kadar uzun/ince bulunduğu, sınıf sınırına uzaklık
+    # ve kron ucunun mine parlaklığıyla ne kadar net ayrıldığı
+    abs_tilt = abs(mesial_tilt)
+    margin = min(abs(abs_tilt - t) for t in (TILT_VERTICAL_MAX, TILT_HORIZONTAL_MIN, TILT_HORIZONTAL_MAX))
+    shape_score = min(1.0, max(0.0, (elongation - 1.1) / 1.0))
+    enamel_score = min(1.0, max(0.0, (crown_end / max(root_end, 1.0) - 1.0) / 0.15))
+    confidence = 0.25 + 0.3 * shape_score + 0.2 * min(1.0, margin / 15) + 0.15 * enamel_score
+    if enamel_flipped and abs_tilt > TILT_HORIZONTAL_MIN:
+        confidence = min(confidence, 0.5)  # kron yönü ters çevrildi — hekim kontrolü şart
 
-    # 0-180 aralığına normalize et
-    tooth_angle = tooth_angle % 180
+    # axis[0] = kök ucu, axis[1] = kron ucu
+    half = 0.5 * math.sqrt(eigvals[1]) * 2.5
+    cx, cy = mean[0] + cx1, mean[1] + cy1
+    axis = [[int(cx - major[0] * half), int(cy - major[1] * half)],
+            [int(cx + major[0] * half), int(cy + major[1] * half)]]
 
-    # Dikey eksene göre açı: 90° = tam dikey
-    # Dişin sol/sağ tarafını belirle
-    tooth_center_x = (x1 + x2) / 2
-    is_left_side = tooth_center_x < (img_w / 2)
+    return classification, mesial_tilt, min(confidence, 0.9), axis
 
-    # --- Bbox oranı ile çapraz doğrulama ---
-    bbox_angle_est, _, bbox_conf = _angle_from_bbox_ratio(bw, bh, x1, x2, img_w)
 
-    # Kontür ve bbox tahmini arasındaki tutarlılık → güvenilirlik
-    consistency = _angle_consistency(tooth_angle, bbox_angle_est, bw, bh)
-
-    # Açıyı ağırlıklı birleştir (kontür ağırlığı daha yüksek)
-    if consistency > 0.7:
-        confidence = min(0.95, 0.6 + consistency * 0.35)
-    else:
-        confidence = max(0.35, consistency * 0.6)
-        # Düşük tutarlılıkta bbox'a daha çok güven
-        if bbox_conf > 0.5:
-            tooth_angle = tooth_angle * 0.6 + _bbox_angle_numeric(bw, bh) * 0.4
-
-    # --- Sınıflandırma ---
-    classification = _classify_angle(tooth_angle, is_left_side)
-
-    return classification, tooth_angle, confidence
+def _classify_tilt(mesial_tilt):
+    abs_tilt = abs(mesial_tilt)
+    if abs_tilt <= TILT_VERTICAL_MAX:
+        return "Dikey (Vertical)"
+    if abs_tilt > TILT_HORIZONTAL_MAX:
+        return "Ters (Inverted)"
+    if abs_tilt >= TILT_HORIZONTAL_MIN:
+        return "Yatay (Horizontal)"
+    return "Mesioangular" if mesial_tilt > 0 else "Distoangular"
 
 
 def _segment_tooth(roi_gray):
-    """
-    Gri tonlamalı ROI'dan diş bölgesini segmente eder.
-
-    Returns:
-        binary mask (uint8)
-    """
-    # Adaptive threshold
-    binary = cv2.adaptiveThreshold(
-        roi_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C
-    )
-
-    # Morfolojik temizleme
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE))
-    cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
-    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    # Ters çevir (diş = beyaz, arka plan = siyah) — röntgende diş genelde parlak
-    # Ama adaptive threshold ile diş beyaz gelmiş olabilir
-    # İstatistiksel kontrol: merkezin değerine bak
-    h, w = cleaned.shape
-    center_val = cleaned[h // 2, w // 2]
-    if center_val == 0:
-        cleaned = cv2.bitwise_not(cleaned)
-
+    """Diş (parlak) bölgesini Otsu eşiği ile ayırır."""
+    _, binary = cv2.threshold(roi_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=2)
     return cleaned
 
 
-def _angle_from_bbox_ratio(bw, bh, x1, x2, img_w):
-    """
-    Bbox width/height oranından fallback açı tahmini yapar.
-
-    Returns:
-        (sınıf_adı, açı_değeri, güvenilirlik)
-    """
-    ratio = bw / bh if bh > 0 else 1.0
-
-    if ratio > 1.5:
-        return "Yatay (Horizontal)", 10, 0.55
-    elif ratio > 1.15:
-        # Mesio/Disto — tarafa bağlı
-        center_x = (x1 + x2) / 2
-        is_left = center_x < (img_w / 2)
-        angle = 45
-        if is_left:
-            return "Mesioangular", angle, 0.40
-        else:
-            return "Mesioangular", angle, 0.40
-    elif ratio < 0.65:
-        return "Dikey (Vertical)", 88, 0.50
-    else:
-        return "Dikey (Vertical)", 85, 0.45
-
-
-def _bbox_angle_numeric(bw, bh):
-    """Bbox oranından sayısal açı tahmini (0-180)."""
+def _angle_from_bbox_ratio(bw, bh):
+    """Segmentasyon başarısız olursa kutu oranından kaba tahmin (yön bilinmez)."""
     ratio = bw / bh if bh > 0 else 1.0
     if ratio > 1.5:
-        return 15  # Yatay
-    elif ratio > 1.1:
-        return 45  # Eğik
-    elif ratio < 0.7:
-        return 90  # Dikey
-    else:
-        return 80  # Dikeye yakın
-
-
-def _angle_consistency(contour_angle, bbox_class, bw, bh):
-    """
-    Kontür açısı ile bbox sınıflandırması arasındaki tutarlılığı ölçer.
-    Returns: 0.0-1.0 (1.0 = tam tutarlı)
-    """
-    bbox_angle = _bbox_angle_numeric(bw, bh)
-
-    diff = abs(contour_angle - bbox_angle)
-    if diff > 90:
-        diff = 180 - diff
-
-    # 0-30° fark: yüksek tutarlılık, 30-60°: orta, 60+: düşük
-    if diff < 20:
-        return 1.0
-    elif diff < 40:
-        return 0.7
-    elif diff < 60:
-        return 0.4
-    else:
-        return 0.2
-
-
-def _classify_angle(angle_deg, is_left_side):
-    """
-    Açı değerinden sınıflandırma yapar.
-
-    Args:
-        angle_deg: 0-180 arası açı (0=yatay, 90=dikey)
-        is_left_side: Dişin görüntünün sol yarısında olup olmadığı
-
-    Returns:
-        str: Sınıf adı
-    """
-    # Dikey
-    if ANGLE_VERTICAL_MIN <= angle_deg <= ANGLE_VERTICAL_MAX:
-        return "Dikey (Vertical)"
-
-    # Yatay
-    if angle_deg < ANGLE_HORIZONTAL_LOW or angle_deg > ANGLE_HORIZONTAL_HIGH:
-        return "Yatay (Horizontal)"
-
-    # Ters
-    if angle_deg > ANGLE_INVERTED_MIN:
-        return "Ters (Inverted)"
-
-    # Mesioangular vs Distoangular
-    # Panoramik röntgende:
-    #   Sol yarı = Hastanın sağ çenesi
-    #   Sağ yarı = Hastanın sol çenesi
-    #
-    # Mesioangular: Dişin tepesi komşu dişe (ortaya) doğru eğik
-    # Distoangular: Dişin tepesi arkaya (ramusa) doğru eğik
-
-    if is_left_side:
-        # Sol yarıdaki diş → Sağ çene
-        # Açı < 70°: eğim sağa (ortaya) → Mesioangular
-        # Açı 110-120°: eğim sola (arkaya) → Distoangular
-        if angle_deg < ANGLE_VERTICAL_MIN:
-            return "Mesioangular"
-        else:
-            return "Distoangular"
-    else:
-        # Sağ yarıdaki diş → Sol çene
-        # Açı > 110°: eğim sola (ortaya) → Mesioangular
-        # Açı < 70°: eğim sağa (arkaya) → Distoangular
-        if angle_deg > ANGLE_VERTICAL_MAX:
-            return "Mesioangular"
-        else:
-            return "Distoangular"
+        return "Yatay (Horizontal)", 90.0, 0.35, None
+    return "Dikey (Vertical)", 0.0, 0.3, None
 
 
 # ========================================================================
-# RAMUS İLİŞKİSİ TESPİTİ
+# RAMUS İLİŞKİSİ (yalnızca alt çene)
 # ========================================================================
 
 def detect_ramus_relation(bbox, gray, img_w, img_h):
     """
-    Dişin ramus (çene dalı) ile ilişkisini belirler.
-
-    Yöntem:
-    1. Dişin posterior (arka) tarafını belirle
-    2. Arkadaki bölgede Sobel-Y ile dikey kenarları tespit et
-    3. En güçlü dikey kenar = ramus ön kenarı
-    4. Dişin ramus kenarına göre pozisyonunu sınıflandır
+    Dişin distalindeki bölgede en güçlü dikey kenarı (ramus ön kenarı) arar.
+    Arama alanı dişin kendi distal kenarının biraz içinden başlar, böylece
+    dişin kendi kenarı ramus sanılmaz.
 
     Returns:
         (sınıf_adı, güvenilirlik)
     """
     x1, y1, x2, y2 = bbox
-    tooth_w = x2 - x1
-    tooth_center_x = (x1 + x2) / 2
-    is_left_side = tooth_center_x < (img_w / 2)
+    tooth_w, tooth_h = x2 - x1, y2 - y1
+    distal_is_left = _is_left(bbox, img_w)
+    search_w = max(int(tooth_w * RAMUS_SEARCH_WIDTH_RATIO), 30)
+    inset = int(tooth_w * 0.6)  # dişin distal %40'ı + distalindeki alan
 
-    # --- Ramus arama bölgesini belirle ---
-    search_w = max(int(img_w * RAMUS_SEARCH_WIDTH_RATIO), 30)
-
-    if is_left_side:
-        # Sol taraftaki diş: ramus daha solda (x1'in solunda)
-        search_x1 = max(0, x1 - search_w)
-        search_x2 = x1 + int(tooth_w * 0.3)  # Dişin biraz içine de bak
-        ramus_direction = "left"  # Ramus solda
+    if distal_is_left:
+        sx1, sx2 = max(0, x1 - search_w), x1 + tooth_w - inset
     else:
-        # Sağ taraftaki diş: ramus daha sağda (x2'nin sağında)
-        search_x1 = x2 - int(tooth_w * 0.3)
-        search_x2 = min(img_w, x2 + search_w)
-        ramus_direction = "right"  # Ramus sağda
+        sx1, sx2 = x2 - tooth_w + inset, min(img_w, x2 + search_w)
+    sy1 = max(0, y1 - int(tooth_h * 0.3))
+    sy2 = min(img_h, y2 + int(tooth_h * 0.3))
 
-    # Dikey arama alanını genişlet (diş yüksekliğinin %50 üstü ve altı)
-    tooth_h = y2 - y1
-    search_y1 = max(0, y1 - int(tooth_h * 0.3))
-    search_y2 = min(img_h, y2 + int(tooth_h * 0.3))
-
-    if search_x2 - search_x1 < 10 or search_y2 - search_y1 < 10:
-        return "Sınıf 1 (Önünde)", 0.30
-
-    search_roi = gray[search_y1:search_y2, search_x1:search_x2]
-
-    # --- Sobel ile dikey kenar tespiti ---
-    ramus_edge_x = _find_ramus_edge(search_roi, ramus_direction)
-
-    if ramus_edge_x is None:
-        # Ramus kenarı bulunamadı — konum tabanlı fallback
+    if sx2 - sx1 < 10 or sy2 - sy1 < 10:
         return _ramus_fallback(bbox, img_w)
 
-    # Ramus kenarının gerçek x koordinatı
-    ramus_abs_x = search_x1 + ramus_edge_x
+    edge_x = _find_ramus_edge(gray[sy1:sy2, sx1:sx2], distal_is_left)
+    if edge_x is None:
+        return _ramus_fallback(bbox, img_w)
 
-    # --- Sınıflandırma ---
-    # Dişin ramus kenarına göre ne kadar içeride olduğunu hesapla
-    if is_left_side:
-        # Sol taraf: ramus solda, diş sağda
-        # Dişin sol kenarı (x1) vs ramus kenarı
-        if x1 >= ramus_abs_x:
-            # Diş tamamen ramus önünde
-            overlap = 0.0
-        else:
-            # Dişin bir kısmı ramus içinde
-            overlap_px = ramus_abs_x - x1
-            overlap = overlap_px / tooth_w
+    ramus_abs_x = sx1 + edge_x
+    if distal_is_left:
+        overlap = (ramus_abs_x - x1) / tooth_w
     else:
-        # Sağ taraf: ramus sağda, diş solda
-        # Dişin sağ kenarı (x2) vs ramus kenarı
-        if x2 <= ramus_abs_x:
-            # Diş tamamen ramus önünde
-            overlap = 0.0
-        else:
-            # Dişin bir kısmı ramus içinde
-            overlap_px = x2 - ramus_abs_x
-            overlap = overlap_px / tooth_w
-
+        overlap = (x2 - ramus_abs_x) / tooth_w
     overlap = min(1.0, max(0.0, overlap))
 
-    # Sınıflandır
     if overlap >= RAMUS_OVERLAP_THRESHOLD_CLASS3:
-        classification = "Sınıf 3 (Tam Ramus İçinde)"
-        confidence = 0.55 + min(0.35, (overlap - RAMUS_OVERLAP_THRESHOLD_CLASS3) * 2)
-    elif overlap >= RAMUS_OVERLAP_THRESHOLD_CLASS2:
-        classification = "Sınıf 2 (Yarı Ramus İçinde)"
-        confidence = 0.50 + min(0.35, (overlap - RAMUS_OVERLAP_THRESHOLD_CLASS2) * 1.5)
-    else:
-        classification = "Sınıf 1 (Önünde)"
-        confidence = 0.60 + min(0.30, (1 - overlap) * 0.4)
-
-    logger.debug(
-        "Ramus: side=%s, ramus_x=%d, overlap=%.2f → %s (conf=%.2f)",
-        "left" if is_left_side else "right", ramus_abs_x, overlap,
-        classification, confidence
-    )
-
-    return classification, confidence
+        return "Sınıf 3 (Tam Ramus İçinde)", 0.5
+    if overlap >= RAMUS_OVERLAP_THRESHOLD_CLASS2:
+        return "Sınıf 2 (Yarı Ramus İçinde)", 0.45
+    return "Sınıf 1 (Önünde)", 0.5
 
 
-def _find_ramus_edge(roi, direction):
+def _find_ramus_edge(roi, distal_is_left):
     """
-    ROI içinde ramus ön kenarını (en güçlü dikey kenar) bulur.
-
-    Args:
-        roi: grayscale numpy array
-        direction: "left" veya "right" — ramus hangi tarafta
-
-    Returns:
-        int: ramus kenarının x koordinatı (ROI içinde), veya None
+    ROI'de ramus ön kenarını bulur: ramus (parlak kemik) distal tarafta olduğundan
+    distal→mesial yönünde parlaktan koyuya geçen en güçlü dikey kenar aranır.
     """
     if roi.size == 0:
         return None
-
-    # CLAHE ile kontrast artır
-    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4))
-    enhanced = clahe.apply(roi)
-
-    # Blur
-    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
-
-    # Sobel-X ile dikey kenarları bul (mutlak değer)
-    sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=SOBEL_KSIZE)
-    sobel_abs = np.abs(sobel_x)
-
-    # Her sütunun toplam kenar gücünü hesapla (dikey kenar profili)
-    edge_profile = sobel_abs.mean(axis=0)
-
-    if edge_profile.max() == 0:
+    enhanced = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(4, 4)).apply(roi)
+    blurred = cv2.GaussianBlur(enhanced, (7, 7), 0)
+    sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
+    # distal solda ise parlak→koyu geçiş soldan sağa negatif gradyan demektir
+    profile = (-sobel_x if distal_is_left else sobel_x).mean(axis=0)
+    profile = np.clip(profile, 0, None)
+    if profile.max() <= 0:
         return None
-
-    # Normalize et
-    edge_profile = edge_profile / edge_profile.max()
-
-    # Eşik üstü güçlü kenarları bul
-    strong_edges = np.where(edge_profile > RAMUS_EDGE_THRESHOLD)[0]
-
-    if len(strong_edges) == 0:
+    profile = profile / profile.max()
+    strong = np.where(profile > RAMUS_EDGE_THRESHOLD)[0]
+    if len(strong) == 0:
         return None
-
-    # Ramus kenarı: sağ tarafta ise en soldaki güçlü kenar,
-    # sol tarafta ise en sağdaki güçlü kenar
-    if direction == "left":
-        # Ramus solda → en sağdaki güçlü kenar = ramus ön kenarı
-        ramus_x = strong_edges[-1]
-    else:
-        # Ramus sağda → en soldaki güçlü kenar = ramus ön kenarı
-        ramus_x = strong_edges[0]
-
-    return int(ramus_x)
+    # mesiale en yakın güçlü kenar = ramus ön kenarı
+    return int(strong[-1] if distal_is_left else strong[0])
 
 
 def _ramus_fallback(bbox, img_w):
-    """
-    Ramus kenarı bulunamadığında konum tabanlı fallback.
-    Mevcut yöntemin biraz geliştirilmiş hali.
-    """
-    x1, y1, x2, y2 = bbox
-    center_x = (x1 + x2) / 2
-    relative_x = center_x / img_w
-
+    """Kenar bulunamadığında konum tabanlı kaba tahmin."""
+    relative_x = ((bbox[0] + bbox[2]) / 2) / img_w
     if relative_x < 0.15 or relative_x > 0.85:
-        return "Sınıf 2 (Yarı Ramus İçinde)", 0.35
-    elif relative_x < 0.25 or relative_x > 0.75:
-        return "Sınıf 1 (Önünde)", 0.40
-    else:
-        return "Sınıf 1 (Önünde)", 0.30
+        return "Sınıf 2 (Yarı Ramus İçinde)", 0.3
+    return "Sınıf 1 (Önünde)", 0.3
 
 
 # ========================================================================
-# GÖMÜLÜLGİÇ DERİNLİĞİ TESPİTİ
+# GÖMÜLÜLÜK DERİNLİĞİ (PELL & GREGORY A/B/C)
 # ========================================================================
 
-def detect_depth_level(bbox, gray, img_h, all_bboxes=None):
+def detect_depth_level(bbox, gray, img_w, img_h, jaw, others=None):
     """
-    Dişin gömülülük derinliğini belirler (Pell & Gregory A/B/C).
-
-    Yöntem:
-    1. Diğer tespit edilen dişlerden oklüzal düzlem referansı oluştur
-    2. Yoksa: Lokal yoğunluk profilinden oklüzal düzlem tahmini
-    3. Dişin üst kenarını oklüzal düzlemle karşılaştır
+    Dişin oklüzal yüzeyinin, 2. molar bölgesindeki oklüzal düzleme göre konumu.
 
     Returns:
-        (sınıf_adı, güvenilirlik)
+        (sınıf_adı, güvenilirlik, oklüzal_y)
     """
     x1, y1, x2, y2 = bbox
-    tooth_h = y2 - y1
-    tooth_top = y1
+    tooth_h = max(1, y2 - y1)
 
-    # --- Oklüzal düzlem referansı ---
-    occlusal_y, ref_confidence = _estimate_occlusal_plane(
-        bbox, img_h, all_bboxes
-    )
+    occlusal_y, ref_conf = _estimate_occlusal_plane(bbox, gray, img_w, img_h, jaw, others or [])
 
-    # --- Dişin oklüzal yüzeyinin referansa göre pozisyonu ---
-    # Pozitif = diş oklüzal düzlemin altında (daha derin)
-    relative_depth = (tooth_top - occlusal_y) / tooth_h if tooth_h > 0 else 0
+    # Pozitif = diş oklüzal düzlemden uzakta (daha derin)
+    if jaw == JAW_LOWER:
+        relative_depth = (y1 - occlusal_y) / tooth_h
+    else:
+        relative_depth = (occlusal_y - y2) / tooth_h
 
-    # Sınıflandırma
     if relative_depth < DEPTH_LEVEL_A_RATIO:
-        # Dişin üstü oklüzal düzlem seviyesinde veya üstünde
         classification = "Seviye A (Oklüzal)"
-        depth_conf = ref_confidence * 0.9
     elif relative_depth < DEPTH_LEVEL_B_RATIO:
-        # Oklüzal düzlem ile servikal çizgi arası
         classification = "Seviye B (Oklüzal-Servikal Arası)"
-        depth_conf = ref_confidence * 0.85
     else:
-        # Servikal çizginin altında
         classification = "Seviye C (Servikal Altı - Derin)"
-        depth_conf = ref_confidence * 0.80
 
-    logger.debug(
-        "Derinlik: occlusal_y=%d, tooth_top=%d, relative=%.2f → %s (conf=%.2f)",
-        occlusal_y, tooth_top, relative_depth, classification, depth_conf
-    )
-
-    return classification, depth_conf
+    logger.debug("Derinlik: jaw=%s occlusal_y=%d relative=%.2f → %s",
+                 jaw, occlusal_y, relative_depth, classification)
+    return classification, ref_conf, int(occlusal_y)
 
 
-def _estimate_occlusal_plane(target_bbox, img_h, all_bboxes=None):
+def _estimate_occlusal_plane(bbox, gray, img_w, img_h, jaw, others):
     """
-    Oklüzal düzlem y-koordinatını tahmin eder.
-
-    Öncelik sırası:
-    1. Diğer dişlerin y1 medyanı (en güvenilir)
-    2. Tek diş varsa: bbox oranına dayalı tahmin
-
-    Returns:
-        (y_koordinatı, güvenilirlik)
+    Dişin mesialindeki şeritte (2. molar bölgesi) satır ortalama parlaklığının
+    en koyu olduğu satırı — alt ve üst dişler arasındaki boşluğu — bulur.
+    Aynı tarafta karşı çenede diş varsa arama iki dişin merkezleri arasıyla sınırlanır.
     """
-    tx1, ty1, tx2, ty2 = target_bbox
+    x1, y1, x2, y2 = bbox
+    tooth_w, tooth_h = x2 - x1, y2 - y1
 
-    if all_bboxes and len(all_bboxes) > 1:
-        # --- Yöntem 1: Diğer dişlerin üst kenarlarının medyanı ---
-        other_tops = []
-        target_center_y = (ty1 + ty2) / 2
-
-        for b in all_bboxes:
-            bx1, by1, bx2, by2 = map(int, b)
-            b_center_y = (by1 + by2) / 2
-
-            # Aynı diş mi? (IoU kontrolü)
-            if abs(bx1 - tx1) < 20 and abs(by1 - ty1) < 20:
-                continue
-
-            # Aynı çene yarısında mı? (üst/alt çene yakınlığı)
-            # y ekseni farkı çok büyükse farklı çenede olabilir
-            if abs(b_center_y - target_center_y) < img_h * 0.3:
-                other_tops.append(by1)
-
-        if other_tops:
-            occlusal_y = int(np.median(other_tops))
-            confidence = min(0.90, 0.50 + len(other_tops) * 0.15)
-            return occlusal_y, confidence
-
-    # --- Yöntem 2: Tek diş — bbox ve görüntü oranına dayalı ---
-    # Diş Y pozisyonuna göre: üst bölgede ise muhtemelen yüzeysel
-    relative_y = ty1 / img_h
-
-    if relative_y < 0.35:
-        # Görüntünün üst kısmında — muhtemelen oklüzal düzlem yakın
-        occlusal_y = int(ty1 - (ty2 - ty1) * 0.1)
-    elif relative_y < 0.55:
-        # Orta bölge
-        occlusal_y = int(ty1 - (ty2 - ty1) * 0.2)
+    if _is_left(bbox, img_w):
+        sx1, sx2 = x2, min(img_w, x2 + int(tooth_w * 1.2))
     else:
-        # Alt bölge — muhtemelen daha derin
-        occlusal_y = int(ty1 - (ty2 - ty1) * 0.35)
+        sx1, sx2 = max(0, x1 - int(tooth_w * 1.2)), x1
 
-    return max(0, occlusal_y), 0.40  # Tek dişte güvenilirlik düşük
+    # Oklüzal düzlem alt çenede dişin üstünde, üst çenede altında aranır
+    if jaw == JAW_LOWER:
+        sy1, sy2 = y1 - int(tooth_h * 0.8), y1 + int(tooth_h * 0.5)
+    else:
+        sy1, sy2 = y2 - int(tooth_h * 0.5), y2 + int(tooth_h * 0.8)
+
+    cy = (y1 + y2) / 2
+    left = _is_left(bbox, img_w)
+    for b in others:
+        ocy = (b[1] + b[3]) / 2
+        if _is_left(b, img_w) != left or abs(ocy - cy) < 0.4 * tooth_h:
+            continue
+        if jaw == JAW_LOWER and ocy < cy:
+            sy1 = max(sy1, int(ocy))
+        elif jaw == JAW_UPPER and ocy > cy:
+            sy2 = min(sy2, int(ocy))
+    sy1, sy2 = max(0, sy1), min(img_h, sy2)
+
+    fallback_y = y1 - 0.1 * tooth_h if jaw == JAW_LOWER else y2 + 0.1 * tooth_h
+    if sx2 - sx1 < 10 or sy2 - sy1 < 10:
+        return fallback_y, 0.3
+
+    strip = cv2.GaussianBlur(gray[sy1:sy2, sx1:sx2], (5, 5), 0).astype(np.float64)
+    profile = strip.mean(axis=1)
+    k = max(3, (sy2 - sy1) // 25)
+    profile = np.convolve(profile, np.ones(k) / k, mode="same")
+    # Kenarlardaki konvolüsyon etkisini dışla
+    core = profile[k:-k] if len(profile) > 2 * k + 5 else profile
+    offset = k if len(profile) > 2 * k + 5 else 0
+    idx = int(np.argmin(core)) + offset
+
+    contrast = (np.median(profile) - profile[idx]) / (profile.std() + 1e-6)
+    confidence = float(min(0.8, max(0.3, 0.3 + 0.2 * contrast)))
+    return float(sy1 + idx), confidence

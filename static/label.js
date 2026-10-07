@@ -17,6 +17,7 @@ const RAMUS_OPTIONS = [
     "Sınıf 1 (Önünde)",
     "Sınıf 2 (Yarı Ramus İçinde)",
     "Sınıf 3 (Tam Ramus İçinde)",
+    "Uygulanamaz (Üst Çene)",
 ];
 const DEPTH_OPTIONS = [
     "Seviye A (Oklüzal)",

@@ -20,7 +20,7 @@ from config import (
     IMPACTION_OPTIONS, RAMUS_OPTIONS, DEPTH_OPTIONS,
     ROOT_OPTIONS, NERVE_OPTIONS,
 )
-from scorer import analyze_case
+from scorer import analyze_case, validate_inputs
 from image_analyzer import analyze_tooth_automatically
 from post_filter import filter_wisdom_detections
 from label_storage import (
@@ -213,15 +213,7 @@ def detect_teeth(file: UploadFile = File(...)):
 
     for det in filtered_detections:
         auto_result = analyze_tooth_automatically(all_boxes[det["_rank"]][0], image, all_bboxes=all_bbox_list)
-        det["auto_analysis"] = {
-            "impaction": auto_result.get("impaction", "Dikey (Vertical)"),
-            "impaction_confidence": auto_result.get("impaction_confidence", 0.5),
-            "ramus": auto_result.get("ramus", "Sınıf 1 (Önünde)"),
-            "ramus_confidence": auto_result.get("ramus_confidence", 0.5),
-            "depth": auto_result.get("depth", "Seviye A (Oklüzal)"),
-            "depth_confidence": auto_result.get("depth_confidence", 0.5),
-            "angle_value": auto_result.get("angle_value", 0),
-        }
+        det["auto_analysis"] = auto_result
 
     for det in raw_detections:
         det.pop("_rank", None)
@@ -241,6 +233,12 @@ def detect_teeth(file: UploadFile = File(...)):
 
 @app.post("/api/analyze")
 async def analyze_tooth(request: AnalyzeRequest):
+    invalid = validate_inputs(**request.model_dump())
+    if invalid:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "Geçersiz seçenek: " + ", ".join(invalid)},
+        )
     result = analyze_case(
         request.gender,
         request.age,

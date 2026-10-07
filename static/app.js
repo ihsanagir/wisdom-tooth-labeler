@@ -385,7 +385,7 @@ function createToothCard(det, idx) {
             <div class="tooth-info">
                 <div class="tooth-badge">${det.index}</div>
                 <div>
-                    <div class="tooth-label">${det.index}. Diş</div>
+                    <div class="tooth-label">${det.index}. Diş · ${escapeHtml(auto.jaw)}</div>
                     <div class="tooth-confidence">Model Güveni: ${(det.confidence * 100).toFixed(1)}%</div>
                 </div>
             </div>
@@ -461,7 +461,7 @@ async function analyzeToothBtn(idx) {
             body: JSON.stringify(body),
         });
         const data = await res.json();
-        renderScore(idx, data);
+        renderScore(idx, res.ok ? data : { error: data.error || 'Analiz başarısız.' });
     } catch (err) {
         console.error('Analiz hatası:', err);
     }
@@ -470,21 +470,37 @@ async function analyzeToothBtn(idx) {
 function renderScore(idx, data) {
     const container = $(`score-result-${idx}`);
     if (!container) return;
+    if (data.error) {
+        container.innerHTML = `<div class="score-recommendation">⚠️ ${escapeHtml(data.error)}</div>`;
+        container.style.display = 'block';
+        return;
+    }
     const sev = data.severity;
-    const labels = { simple: 'Basit', surgical: 'Cerrahi', advanced: 'İleri Cerrahi' };
+    const pct = Math.round((data.pederson_index / data.pederson_max) * 100);
+    const rows = data.breakdown.map(b => `
+        <tr><td>${escapeHtml(b.factor)}</td><td>${escapeHtml(b.value)}</td><td class="pts">+${b.points}</td></tr>`).join('');
+    const risks = data.risk_factors.map(r => `
+        <span class="risk-chip ${r.level}">${escapeHtml(r.factor)}: ${escapeHtml(r.value)}</span>`).join('');
+    const notes = data.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('');
     container.innerHTML = `
         <div class="score-header">
-            <span class="score-value ${sev}">%${data.score}</span>
-            <span class="score-severity ${sev}">${labels[sev] || sev}</span>
+            <span class="score-value ${sev}">${data.pederson_index}<small>/${data.pederson_max}</small></span>
+            <span class="score-severity ${sev}">${escapeHtml(data.severity_label)}</span>
         </div>
         <div class="score-bar-container">
             <div class="score-bar ${sev}" style="width: 0%"></div>
         </div>
+        <table class="score-breakdown">
+            <caption>Pederson zorluk indeksi</caption>
+            ${rows}
+        </table>
+        ${risks ? `<div class="risk-chips">${risks}</div>` : ''}
+        ${notes ? `<ul class="score-notes">${notes}</ul>` : ''}
         <div class="score-recommendation">${escapeHtml(data.recommendation)}</div>`;
     container.style.display = 'block';
     requestAnimationFrame(() => {
         const bar = container.querySelector('.score-bar');
-        if (bar) bar.style.width = `${data.score}%`;
+        if (bar) bar.style.width = `${pct}%`;
     });
 }
 
