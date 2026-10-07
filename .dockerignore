@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__/
+*.log
+tests/
+train/
+valid/
+test/
+dataset_v2/
+dataset_pose/
+backup_original_split/
+annotated_images.zip
+runs/
+*.pt
+!trained_models/**/best.pt

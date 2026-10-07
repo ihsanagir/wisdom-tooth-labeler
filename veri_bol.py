@@ -113,10 +113,8 @@ def clean_label(lbl_path: Path):
     return lines, notes
 
 
-def main():
-    images = sorted(p for p in SRC_IMG.iterdir() if p.suffix.lower() in IMG_EXTS)
-    print(f"[*] Kaynak görüntü: {len(images)}")
-
+def group_images(images, verbose=True):
+    """Aynı hasta / aynı kaynak / görsel kopya görüntüleri tek grupta toplar."""
     uf = UnionFind()
     by_patient = defaultdict(list)
     for p in images:
@@ -126,7 +124,8 @@ def main():
         for n in names[1:]:
             uf.union(names[0], n)
 
-    print("[*] Görsel benzerlik hesaplanıyor...")
+    if verbose:
+        print("[*] Görsel benzerlik hesaplanıyor...")
     vectors = {p.name: thumbnail_vector(p) for p in images}
     names = [n for n, v in vectors.items() if v is not None]
     mat = np.array([vectors[n] for n in names])
@@ -138,27 +137,41 @@ def main():
             if uf.find(a) != uf.find(b):
                 near_dup += 1
             uf.union(a, b)
-    print(f"[*] Dosya adından bağımsız {near_dup} görsel kopya birleştirildi.")
+    if verbose:
+        print(f"[*] Dosya adından bağımsız {near_dup} görsel kopya birleştirildi.")
 
     groups = defaultdict(list)
     for p in images:
         groups[uf.find(p.name)].append(p)
-    group_list = sorted(groups.values(), key=lambda g: g[0].name)
-    print(f"[*] Bağımsız grup sayısı: {len(group_list)}")
+    return sorted(groups.values(), key=lambda g: g[0].name)
 
-    random.seed(SEED)
+
+def split_groups(group_list, seed=SEED, train_ratio=TRAIN_RATIO, val_ratio=VAL_RATIO):
+    """Grupları görüntü sayısına göre train/valid/test'e böler; grup asla bölünmez."""
+    group_list = list(group_list)
+    random.seed(seed)
     random.shuffle(group_list)
-    total = len(images)
+    total = sum(len(g) for g in group_list)
     splits = {"train": [], "valid": [], "test": []}
     count = 0
     for g in group_list:
-        if count < total * TRAIN_RATIO:
+        if count < total * train_ratio:
             splits["train"].append(g)
-        elif count < total * (TRAIN_RATIO + VAL_RATIO):
+        elif count < total * (train_ratio + val_ratio):
             splits["valid"].append(g)
         else:
             splits["test"].append(g)
         count += len(g)
+    return splits
+
+
+def main():
+    images = sorted(p for p in SRC_IMG.iterdir() if p.suffix.lower() in IMG_EXTS)
+    print(f"[*] Kaynak görüntü: {len(images)}")
+
+    group_list = group_images(images)
+    print(f"[*] Bağımsız grup sayısı: {len(group_list)}")
+    splits = split_groups(group_list)
 
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
