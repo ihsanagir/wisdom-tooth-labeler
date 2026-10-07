@@ -298,6 +298,8 @@ def detect_for_label(image_name: str):
             "auto_impaction": auto.get("impaction", "Dikey (Vertical)"),
             "auto_ramus": auto.get("ramus", "Sınıf 1 (Önünde)"),
             "auto_depth": auto.get("depth", "Seviye A (Oklüzal)"),
+            "auto_fdi": auto.get("fdi"),
+            "auto_jaw": auto.get("jaw"),
         })
 
     return {

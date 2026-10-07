@@ -63,6 +63,20 @@ let currentImgObj   = null;
 // ============================================================
 
 const $ = (id) => document.getElementById(id);
+
+// Kanvas renkleri theme.css değişkenlerinden okunur
+const css = getComputedStyle(document.documentElement);
+const THEME = {
+    idle:     css.getPropertyValue("--text-3").trim(),
+    saved:    css.getPropertyValue("--ok").trim(),
+    selected: css.getPropertyValue("--accent").trim(),
+    ink:      css.getPropertyValue("--accent-ink").trim(),
+    mono:     css.getPropertyValue("--mono").trim(),
+};
+
+function toothName(det) {
+    return det.auto_fdi ? String(det.auto_fdi) : `#${det.index}`;
+}
 const canvas        = $("labelCanvas");
 const ctx           = canvas.getContext("2d");
 const canvasWrap    = $("canvasWrap");
@@ -99,7 +113,7 @@ async function loadImageList() {
         updateProgress(data.labeled_count, data.total);
         renderImageList();
     } catch (e) {
-        imageList.innerHTML = `<div class="list-loading" style="color:#ef4444">Yüklenemedi.</div>`;
+        imageList.innerHTML = `<div class="list-loading error">Görüntüler yüklenemedi.</div>`;
     }
 }
 
@@ -156,7 +170,7 @@ async function selectImage(name) {
     toggleMobileSidebar(false); // Mobilde sol çekmeceyi otomatik kapat
     renderImageList();
     showLabelForm(false);
-    toothTabs.innerHTML = `<span style="color:var(--text-muted);font-size:12px">Yükleniyor…</span>`;
+    toothTabs.innerHTML = `<span class="hint">Yükleniyor…</span>`;
 
     placeholder.style.display = "none";
     canvas.style.display = "block";
@@ -204,11 +218,15 @@ async function selectImage(name) {
             const first = detections[0];
             selectTooth(first.index);
         } else {
-            toothTabs.innerHTML = `<span style="color:var(--accent);font-size:12px">💡 Görüntü üzerine fare ile sürükleyerek 20'lik diş kutusu çizebilirsiniz.</span>`;
+            toothTabs.innerHTML = `<span class="hint">Model diş bulamadı — görüntü üzerinde sürükleyerek kutu çizin.</span>`;
         }
 
     } catch (e) {
-        toothTabs.innerHTML = `<span style="color:#ef4444;font-size:12px">⚠ ${e.message}</span>`;
+        toothTabs.innerHTML = "";
+        const err = document.createElement("span");
+        err.className = "hint error";
+        err.textContent = e.message;
+        toothTabs.appendChild(err);
     }
 }
 
@@ -269,22 +287,22 @@ function drawBboxes() {
         const isSelected = det.index === selectedIdx;
         const isSaved    = !!savedLabels[det.index];
 
-        let color = "#6b7280";
-        if (isSaved)    color = "#22c55e";
-        if (isSelected) color = "#fbbf24";
+        let color = THEME.idle;
+        if (isSaved)    color = THEME.saved;
+        if (isSelected) color = THEME.selected;
 
         ctx.strokeStyle = color;
         ctx.lineWidth   = isSelected ? 2.5 : 1.5;
         ctx.strokeRect(sx, sy, sw, sh);
 
         // Etiket kutusu
-        const label = `${det.index}.Diş`;
-        ctx.font = "bold 11px Inter, Arial";
+        const label = toothName(det);
+        ctx.font = `500 12px ${THEME.mono}`;
         const tw = ctx.measureText(label).width;
         ctx.fillStyle = color;
-        ctx.fillRect(sx, sy - 18, tw + 8, 18);
-        ctx.fillStyle = "#000";
-        ctx.fillText(label, sx + 4, sy - 5);
+        ctx.fillRect(sx, sy - 19, tw + 10, 18);
+        ctx.fillStyle = THEME.ink;
+        ctx.fillText(label, sx + 5, sy - 6);
     });
 
     // Halen çizilmekte olan geçici kutu
@@ -294,15 +312,15 @@ function drawBboxes() {
         const w = Math.abs(currentX - startX) * canvasScale;
         const h = Math.abs(currentY - startY) * canvasScale;
 
-        ctx.strokeStyle = "#3b82f6";
+        ctx.strokeStyle = THEME.selected;
         ctx.lineWidth   = 2;
-        ctx.setLineDash([4, 4]);
+        ctx.setLineDash([5, 4]);
         ctx.strokeRect(x, y, w, h);
         ctx.setLineDash([]);
 
-        ctx.fillStyle = "#3b82f6";
-        ctx.font = "bold 11px Inter, Arial";
-        ctx.fillText("Yeni Diş Kutus...", x + 4, y - 5);
+        ctx.fillStyle = THEME.selected;
+        ctx.font = `500 12px ${THEME.mono}`;
+        ctx.fillText("yeni kutu", x + 4, y - 6);
     }
 }
 
@@ -412,7 +430,10 @@ function toggleMobileSidebar(forceState) {
 }
 
 function enableDrawMode() {
-    alert("💡 Dokunmatik ekranda parmağınızla veya bilgisayarda fare ile sürükleyerek 20'lik diş kutusu çizebilirsiniz.");
+    const hint = document.querySelector(".draw-hint");
+    hint.classList.remove("flash");
+    void hint.offsetWidth;  // animasyonu yeniden başlat
+    hint.classList.add("flash");
 }
 
 // ============================================================
@@ -437,10 +458,11 @@ function selectTooth(index) {
     if (!det) return;
 
     showLabelForm(true);
-    $("formToothTitle").textContent = `${index}. Diş`;
+    $("formToothTitle").textContent = det.auto_fdi ? `Diş ${det.auto_fdi} · ${det.auto_jaw}` : `Diş #${index}`;
 
     $("autoHint").innerHTML =
-        `📐 <b>Konum:</b> X:[${det.bbox[0]}, ${det.bbox[2]}] Y:[${det.bbox[1]}, ${det.bbox[3]}]`;
+        `Kutu <b>x</b> ${det.bbox[0]}–${det.bbox[2]} · <b>y</b> ${det.bbox[1]}–${det.bbox[3]}` +
+        (savedLabels[index] ? " · kayıtlı etiket" : ` · model güveni %${Math.round(det.confidence * 100)}`);
 
     const saved = savedLabels[index];
     setRadio("impactionGroup", saved?.impaction ?? det.auto_impaction);
@@ -456,7 +478,8 @@ function selectTooth(index) {
 async function deleteCurrentBox() {
     if (selectedIdx === null || !currentImage) return;
 
-    if (!confirm(`${selectedIdx}. Diş kutusunu silmek istediğinize emin misiniz?`)) return;
+    const target = detections.find(d => d.index === selectedIdx);
+    if (!confirm(`${target ? toothName(target) : selectedIdx} kutusunu ve etiketini silmek istediğinize emin misiniz?`)) return;
 
     try {
         await fetch("/api/label/delete_box", {
@@ -482,10 +505,10 @@ async function deleteCurrentBox() {
         selectTooth(detections.length > 0 ? 1 : null);
         redrawCanvas();
         updateImageLabeledStatus();
-        showFeedback("✓ Kutu silindi.", true);
+        showFeedback("Kutu silindi.", true);
 
     } catch (e) {
-        showFeedback("⚠ Silme hatası: " + e.message, false);
+        showFeedback("Silme hatası: " + e.message, false);
     }
 }
 
@@ -496,14 +519,14 @@ async function deleteCurrentBox() {
 function renderTabs() {
     toothTabs.innerHTML = "";
     if (detections.length === 0) {
-        toothTabs.innerHTML = `<span style="color:var(--text-muted);font-size:12px">Fare ile sürüklerek 20'lik diş kutusu çizin.</span>`;
+        toothTabs.innerHTML = `<span class="hint">Görüntü üzerinde sürükleyerek diş kutusu çizin.</span>`;
         return;
     }
     detections.forEach(det => {
         const btn = document.createElement("button");
         btn.className = "tooth-tab" + (savedLabels[det.index] ? " saved" : "");
         btn.dataset.idx = det.index;
-        btn.textContent = `${det.index}. Diş`;
+        btn.textContent = toothName(det);
         btn.onclick = () => selectTooth(det.index);
         toothTabs.appendChild(btn);
     });
@@ -575,7 +598,7 @@ async function saveCurrentLabel() {
     const nerve     = getRadio("nerveGroup") || "Uzak";
 
     if (!impaction || !ramus || !depth) {
-        showFeedback("⚠ Lütfen tüm alanları seçin.", false);
+        showFeedback("Lütfen açı, ramus ve derinlik alanlarını seçin.", false);
         return;
     }
 
@@ -607,17 +630,17 @@ async function saveCurrentLabel() {
             updateTab(selectedIdx);
             redrawCanvas();
             updateImageLabeledStatus();
-            showFeedback("✓ Kaydedildi!", true);
+            showFeedback("Kaydedildi.", true);
 
             const next = detections.find(d => d.index > selectedIdx && !savedLabels[d.index]);
             if (next) setTimeout(() => selectTooth(next.index), 600);
         } else {
-            showFeedback("⚠ Kaydedilemedi.", false);
+            showFeedback("Kaydedilemedi.", false);
         }
     } catch (e) {
-        showFeedback("⚠ Hata: " + e.message, false);
+        showFeedback("Hata: " + e.message, false);
     } finally {
-        $("saveBtnText").textContent = "💾 Etiketleri Kaydet";
+        $("saveBtnText").textContent = "Kaydet";
     }
 }
 
@@ -652,7 +675,7 @@ async function showStats() {
         const data = await res.json();
         renderStats(data);
     } catch (e) {
-        $("statsContent").innerHTML = `<span style="color:#ef4444">Yüklenemedi.</span>`;
+        $("statsContent").innerHTML = `<span class="hint error">İstatistikler yüklenemedi.</span>`;
     }
 }
 
