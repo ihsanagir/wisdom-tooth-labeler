@@ -6,8 +6,10 @@ import os
 APP_VERSION = "1.2.0"
 
 # --- Model Ayarları ---
-# disprojesi2/3 train==valid olan bölmeyle eğitildi (metrikleri şişik) → kullanılmamalı.
-# Sızıntısız yeniden eğitim tamamlanınca buradaki yol güncellenecek.
+# Model seçimi (2026-10-08): dataset_v2 test setinin hiçbir modelin eğitimde görmediği
+# 35 görüntülük alt kümesinde disprojesi52 en yüksek mAP50 (0.988) ve recall (0.983).
+# Sızıntısız bölmeyle eğitilen disprojesi6: mAP50 0.953 — daha iyi değil.
+# disprojesi2/3 train==valid bölmesiyle eğitildi → adil ölçülemez, kullanılmamalı.
 MODEL_PATH = os.getenv("MODEL_PATH", "trained_models/disprojesi52/weights/best.pt")
 CONFIDENCE_THRESHOLD = 0.35  # 0.30 → 0.35 (post-filter ile birlikte daha dengeli)
 # Sunucuda GPU yok; lokalde de eğitimle GPU belleği paylaşılmasın diye varsayılan CPU
