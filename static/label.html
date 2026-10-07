@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/theme.css?v=1">
-    <link rel="stylesheet" href="/static/label.css?v=2">
+    <link rel="stylesheet" href="/static/label.css?v=3">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -100,6 +100,29 @@
             <div class="auto-hint" id="autoHint"></div>
 
             <div class="field-group">
+                <div class="field-header"><label>Çene</label></div>
+                <div class="jaw-toggle" id="jawToggle" role="radiogroup" aria-label="Çene">
+                    <button type="button" data-jaw="Alt Çene" role="radio">Alt çene</button>
+                    <button type="button" data-jaw="Üst Çene" role="radio">Üst çene</button>
+                </div>
+            </div>
+
+            <div class="field-group">
+                <div class="field-header">
+                    <label>Anatomik noktalar <small>isteğe bağlı · <kbd>1</kbd>–<kbd>8</kbd></small></label>
+                    <button class="guide-btn" onclick="toggleGuide('guideKp')" aria-label="Açıklama"><svg class="ico"><use href="#i-help"/></svg></button>
+                </div>
+                <div class="guide-box" id="guideKp">
+                    Bir noktayı seçip görüntüde ilgili yere tıklayın; sonraki eksik noktaya otomatik geçilir.
+                    Noktalardan Winter açısı (M2 eksenine göre), Pell &amp; Gregory derinliği/ramus sınıfı ve
+                    sinir yakınlığı hesaplanıp öneri olarak gösterilir. Bu noktalar ileride
+                    anatomik nokta (pose) modelinin eğitim verisi olur. <kbd>Esc</kbd> işaretlemeyi bırakır.
+                </div>
+                <div class="kp-list" id="kpList"></div>
+                <div class="kp-suggest" id="kpSuggest"></div>
+            </div>
+
+            <div class="field-group">
                 <div class="field-header">
                     <label>Gömülülük açısı <small>Winter</small></label>
                     <button class="guide-btn" onclick="toggleGuide('guideImpaction')" aria-label="Açıklama"><svg class="ico"><use href="#i-help"/></svg></button>
@@ -169,6 +192,6 @@
     </aside>
 </main>
 
-<script src="/static/label.js?v=2"></script>
+<script src="/static/label.js?v=5"></script>
 </body>
 </html>

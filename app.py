@@ -21,6 +21,7 @@ from config import (
     ROOT_OPTIONS, NERVE_OPTIONS,
 )
 from scorer import analyze_case, validate_inputs
+from geometry import analyze_keypoints, applicable_keypoints, KEYPOINTS, KEYPOINT_LABELS
 from image_analyzer import analyze_tooth_automatically
 from post_filter import filter_wisdom_detections
 from label_storage import (
@@ -319,6 +320,8 @@ class LabelSaveRequest(BaseModel):
     root: str = "Normal/Konik"
     nerve: str = "Uzak"
     notes: str = ""
+    keypoints: dict = {}
+    jaw: str | None = None
 
 
 @app.post("/api/label/save")
@@ -330,8 +333,30 @@ async def save_label_endpoint(request: LabelSaveRequest):
         request.image_name, request.bbox_index, request.bbox,
         request.impaction, request.ramus, request.depth,
         request.root, request.nerve, request.notes,
+        request.keypoints, request.jaw,
     )
     return result
+
+
+class GeometryRequest(BaseModel):
+    keypoints: dict = {}
+    jaw: str = "Alt Çene"
+    bbox: list | None = None
+
+
+@app.get("/api/label/keypoints")
+async def keypoint_schema():
+    """Etiketleme aracı için nokta sırası ve adları."""
+    return {
+        "keypoints": [{"name": k, "label": KEYPOINT_LABELS[k]} for k in KEYPOINTS],
+        "upper_jaw": applicable_keypoints("Üst Çene"),
+    }
+
+
+@app.post("/api/label/geometry")
+async def keypoint_geometry(request: GeometryRequest):
+    """İşaretlenen noktalardan Winter / Pell & Gregory / sinir önerisi hesaplar."""
+    return analyze_keypoints(request.keypoints, request.jaw, request.bbox)
 
 
 class DeleteBoxRequest(BaseModel):

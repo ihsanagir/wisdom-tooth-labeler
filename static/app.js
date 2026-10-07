@@ -609,11 +609,11 @@ function renderResult() {
 // ════════════════════════════════════════════════════════════════════════
 function bindKeyboard() {
     document.addEventListener('keydown', e => {
-        if (e.target.closest('input, select, textarea')) return;
+        if (e.target.closest?.('input, select, textarea')) return;
         if (!state.imgURL) return;
         switch (e.key) {
             case ' ':
-                if (e.target.closest('button')) return;
+                if (e.target.closest?.('button')) return;
                 e.preventDefault();
                 state.layersHidden = !state.layersHidden;
                 applyLayers();

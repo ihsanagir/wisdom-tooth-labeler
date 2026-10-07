@@ -72,10 +72,48 @@ const THEME = {
     selected: css.getPropertyValue("--accent").trim(),
     ink:      css.getPropertyValue("--accent-ink").trim(),
     mono:     css.getPropertyValue("--mono").trim(),
+    axis:     "#ff8a65",
+    occlusal: "#f0cf6a",
 };
 
+// Anatomik nokta renkleri (sıra geometry.KEYPOINTS ile aynı)
+const KP_COLORS = ["#ff8a65", "#ff8a65", "#f0cf6a", "#f0cf6a", "#c9a7ff", "#c9a7ff", "#67d4d0", "#7fb2ff"];
+let kpSchema   = [];     // [{name, label}]
+let kpUpperJaw = [];     // üst çenede geçerli nokta adları
+let activeKp   = null;   // işaretlenmekte olan nokta adı
+let geomTimer  = null;
+let lastGeometry = null;
+
+function jawOf(det) {
+    if (det.jaw) return det.jaw;
+    if (det.auto_jaw) return det.auto_jaw;
+    const cy = (det.bbox[1] + det.bbox[3]) / 2;
+    return cy < imgNaturalH * 0.52 ? "Üst Çene" : "Alt Çene";
+}
+
+function applicableKps(det) {
+    return jawOf(det) === "Üst Çene" ? kpSchema.filter(k => kpUpperJaw.includes(k.name)) : kpSchema;
+}
+
+function iou(a, b) {
+    const ix = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
+    const iy = Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+    const inter = ix * iy;
+    const ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter;
+    return ua > 0 ? inter / ua : 0;
+}
+
+function nextIndex() {
+    return detections.reduce((m, d) => Math.max(m, d.index), 0) + 1;
+}
+
 function toothName(det) {
-    return det.auto_fdi ? String(det.auto_fdi) : `#${det.index}`;
+    if (det.auto_fdi && !det.jaw) return String(det.auto_fdi);
+    if (!imgNaturalW) return `#${det.index}`;
+    // FDI: görüntünün solu hastanın sağıdır (18/48), sağı hastanın solu (28/38)
+    const left = (det.bbox[0] + det.bbox[2]) / 2 < imgNaturalW / 2;
+    const upper = jawOf(det) === "Üst Çene";
+    return String(left ? (upper ? 18 : 48) : (upper ? 28 : 38));
 }
 const canvas        = $("labelCanvas");
 const ctx           = canvas.getContext("2d");
@@ -96,6 +134,13 @@ document.addEventListener("DOMContentLoaded", () => {
     buildRadioGroups();
     loadImageList();
     initCanvasEvents();
+    loadKeypointSchema();
+    initJawToggle();
+    document.addEventListener("keydown", onKeyDown);
+    // Elle yapılan seçimler öneri satırlarındaki "seçili" durumunu güncellesin
+    labelForm.addEventListener("click", e => {
+        if (e.target.closest(".radio-option")) setTimeout(renderSuggestions, 0);
+    });
 
     $("statsToggle").addEventListener("click", showStats);
     window.addEventListener("resize", () => { if (currentImage) redrawCanvas(); });
@@ -192,6 +237,8 @@ async function selectImage(name) {
                 auto_impaction: l.impaction || "Dikey (Vertical)",
                 auto_ramus: l.ramus || "Sınıf 1 (Önünde)",
                 auto_depth: l.depth || "Seviye A (Oklüzal)",
+                keypoints: l.keypoints || {},
+                jaw: l.jaw || null,
             });
         });
 
@@ -201,10 +248,10 @@ async function selectImage(name) {
             const data = await res.json();
             if (!data.error && data.detections) {
                 // Model çıktılarını ekle (eğer önceden eklenmediyse)
+                // Kayıtlı kutularla örtüşen öneriler atlanır; yenilere çakışmayan indeks verilir
                 data.detections.forEach(d => {
-                    if (!detections.some(ex => ex.index === d.index)) {
-                        detections.push(d);
-                    }
+                    if (detections.some(ex => iou(ex.bbox, d.bbox) > 0.5)) return;
+                    detections.push({ ...d, index: nextIndex(), keypoints: {} });
                 });
             }
         } catch (e) {
@@ -305,6 +352,8 @@ function drawBboxes() {
         ctx.fillText(label, sx + 5, sy - 6);
     });
 
+    drawKeypoints();
+
     // Halen çizilmekte olan geçici kutu
     if (isDrawing) {
         const x = Math.min(startX, currentX) * canvasScale;
@@ -345,6 +394,12 @@ function initCanvasEvents() {
         const pos = getPos(e);
         const mx = pos.x;
         const my = pos.y;
+
+        // Nokta işaretleme modu: tıklanan yere aktif noktayı koy
+        if (activeKp && selectedIdx !== null) {
+            placeKeypoint(Math.round(mx), Math.round(my));
+            return;
+        }
 
         // Önce var olan bir kutuya mı tıklandı/dokunuldu kontrol et
         for (const det of detections) {
@@ -388,10 +443,11 @@ function initCanvasEvents() {
         }
 
         // Yeni kutuyu ekle
-        const newIdx = detections.length + 1;
+        const newIdx = nextIndex();
         const newDet = {
             index: newIdx,
             bbox: [x1, y1, x2, y2],
+            keypoints: {},
             confidence: 1.0,
             auto_impaction: "Dikey (Vertical)",
             auto_ramus: "Sınıf 1 (Önünde)",
@@ -458,11 +514,19 @@ function selectTooth(index) {
     if (!det) return;
 
     showLabelForm(true);
-    $("formToothTitle").textContent = det.auto_fdi ? `Diş ${det.auto_fdi} · ${det.auto_jaw}` : `Diş #${index}`;
+    $("formToothTitle").textContent = `Diş ${toothName(det)} · ${jawOf(det)}`;
 
     $("autoHint").innerHTML =
         `Kutu <b>x</b> ${det.bbox[0]}–${det.bbox[2]} · <b>y</b> ${det.bbox[1]}–${det.bbox[3]}` +
         (savedLabels[index] ? " · kayıtlı etiket" : ` · model güveni %${Math.round(det.confidence * 100)}`);
+
+    if (!det.keypoints) det.keypoints = {};
+    renderJawToggle(det);
+    setActiveKp(null);
+    renderKpList();
+    lastGeometry = null;
+    $("kpSuggest").innerHTML = "";
+    requestGeometry();
 
     const saved = savedLabels[index];
     setRadio("impactionGroup", saved?.impaction ?? det.auto_impaction);
@@ -488,21 +552,12 @@ async function deleteCurrentBox() {
             body: JSON.stringify({ image_name: currentImage, bbox_index: selectedIdx })
         });
 
+        // İndeksler sabit kimliktir (backend de yeniden numaralandırmaz)
         delete savedLabels[selectedIdx];
-
-        // Detections dizisinden çıkar ve indeksleri güncelle
         detections = detections.filter(d => d.index !== selectedIdx);
-        detections.forEach((d, idx) => { d.index = idx + 1; });
-
-        // SavedLabels anahtarlarını da güncelle
-        const newSaved = {};
-        Object.keys(savedLabels).forEach((oldIdx, i) => {
-            newSaved[i + 1] = savedLabels[oldIdx];
-        });
-        savedLabels = newSaved;
 
         renderTabs();
-        selectTooth(detections.length > 0 ? 1 : null);
+        selectTooth(detections.length > 0 ? detections[0].index : null);
         redrawCanvas();
         updateImageLabeledStatus();
         showFeedback("Kutu silindi.", true);
@@ -613,6 +668,8 @@ async function saveCurrentLabel() {
         root,
         nerve,
         notes: $("labelNotes").value,
+        keypoints: det ? det.keypoints || {} : {},
+        jaw: det ? jawOf(det) : null,
     };
 
     $("saveBtnText").textContent = "Kaydediliyor…";
@@ -699,4 +756,231 @@ function renderStats(data) {
         <div class="stat-section"><h4>Kök Morfolojisi</h4>${distHtml(data.root_distribution)}</div>
         <div class="stat-section"><h4>Sinir İlişkisi</h4>${distHtml(data.nerve_distribution)}</div>
     `;
+}
+
+
+// ============================================================
+// ANATOMİK NOKTALAR (keypoint) — geometrik öneri + pose eğitim verisi
+// ============================================================
+
+async function loadKeypointSchema() {
+    try {
+        const data = await fetch("/api/label/keypoints").then(r => r.json());
+        kpSchema = data.keypoints;
+        kpUpperJaw = data.upper_jaw;
+    } catch (e) {
+        kpSchema = [];
+    }
+}
+
+function currentDet() {
+    return detections.find(d => d.index === selectedIdx) || null;
+}
+
+function initJawToggle() {
+    $("jawToggle").querySelectorAll("button").forEach(btn => {
+        btn.addEventListener("click", () => {
+            const det = currentDet();
+            if (!det) return;
+            det.jaw = btn.dataset.jaw;
+            // Üst çenede geçersiz noktaları temizle
+            const allowed = applicableKps(det).map(k => k.name);
+            Object.keys(det.keypoints).forEach(k => { if (!allowed.includes(k)) delete det.keypoints[k]; });
+            renderJawToggle(det);
+            renderKpList();
+            renderTabs();
+            toothTabs.querySelector(`[data-idx="${det.index}"]`)?.classList.add("active");
+            $("formToothTitle").textContent = `Diş ${toothName(det)} · ${jawOf(det)}`;
+            redrawCanvas();
+            requestGeometry();
+        });
+    });
+}
+
+function renderJawToggle(det) {
+    const jaw = jawOf(det);
+    $("jawToggle").querySelectorAll("button").forEach(b =>
+        b.setAttribute("aria-checked", String(b.dataset.jaw === jaw)));
+}
+
+function renderKpList() {
+    const det = currentDet();
+    const list = $("kpList");
+    list.innerHTML = "";
+    if (!det || !kpSchema.length) return;
+
+    applicableKps(det).forEach(k => {
+        const i = kpSchema.findIndex(s => s.name === k.name);
+        const pt = det.keypoints[k.name];
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "kp-row" + (pt ? " placed" : "") + (activeKp === k.name ? " active" : "");
+        row.style.setProperty("--kp-color", KP_COLORS[i]);
+        row.dataset.kp = k.name;
+
+        const num = document.createElement("span");
+        num.className = "kp-num";
+        num.textContent = i + 1;
+        const label = document.createElement("span");
+        label.textContent = k.label;
+        const state = document.createElement("span");
+        state.className = "kp-state";
+        state.textContent = pt ? "işaretli" : activeKp === k.name ? "tıklayın…" : "";
+        const clear = document.createElement("span");
+        clear.className = "kp-clear";
+        clear.title = "Noktayı sil";
+        clear.innerHTML = '<svg class="ico"><use href="#i-x"/></svg>';
+        clear.addEventListener("click", (e) => {
+            e.stopPropagation();
+            delete det.keypoints[k.name];
+            renderKpList();
+            redrawCanvas();
+            requestGeometry();
+        });
+
+        row.append(num, label, state, clear);
+        row.addEventListener("click", () => setActiveKp(activeKp === k.name ? null : k.name));
+        list.appendChild(row);
+    });
+}
+
+function setActiveKp(name) {
+    activeKp = name;
+    canvas.classList.toggle("kp-mode", !!name);
+    renderKpList();
+}
+
+function placeKeypoint(x, y) {
+    const det = currentDet();
+    if (!det || !activeKp) return;
+    det.keypoints[activeKp] = [x, y];
+    // Sıradaki eksik noktaya geç
+    const next = applicableKps(det).find(k => !det.keypoints[k.name]);
+    setActiveKp(next ? next.name : null);
+    redrawCanvas();
+    requestGeometry();
+}
+
+function onKeyDown(e) {
+    if (e.target.closest?.("input, textarea, select")) return;
+    const det = currentDet();
+    if (!det) return;
+    if (e.key === "Escape" && activeKp) {
+        setActiveKp(null);
+        return;
+    }
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= kpSchema.length) {
+        const name = kpSchema[n - 1].name;
+        if (applicableKps(det).some(k => k.name === name)) setActiveKp(name);
+    }
+}
+
+function drawKeypoints() {
+    const det = currentDet();
+    if (!det || !det.keypoints) return;
+    const kp = det.keypoints;
+    const P = (name) => kp[name] ? [kp[name][0] * canvasScale, kp[name][1] * canvasScale] : null;
+
+    const line = (a, b, color, dash = []) => {
+        if (!a || !b) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash(dash);
+        ctx.beginPath();
+        ctx.moveTo(a[0], a[1]);
+        ctx.lineTo(b[0], b[1]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    };
+
+    // M3 ekseni, M2 ekseni (apeks → oklüzal orta), M2 oklüzal hattı
+    line(P("m3_apex"), P("m3_crown"), THEME.axis);
+    const cm = P("m2_cusp_mesial"), cd = P("m2_cusp_distal");
+    if (cm && cd) {
+        line(cm, cd, THEME.occlusal, [5, 4]);
+        line(P("m2_apex"), [(cm[0] + cd[0]) / 2, (cm[1] + cd[1]) / 2], "#c9a7ff", [3, 3]);
+    }
+
+    kpSchema.forEach((k, i) => {
+        const p = P(k.name);
+        if (!p) return;
+        ctx.fillStyle = KP_COLORS[i];
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.font = `500 11px ${THEME.mono}`;
+        ctx.fillStyle = "#fff";
+        ctx.fillText(String(i + 1), p[0] + 7, p[1] - 6);
+    });
+}
+
+function requestGeometry() {
+    clearTimeout(geomTimer);
+    geomTimer = setTimeout(async () => {
+        const det = currentDet();
+        if (!det) return;
+        const reqIdx = det.index;
+        try {
+            const res = await fetch("/api/label/geometry", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ keypoints: det.keypoints, jaw: jawOf(det), bbox: det.bbox }),
+            });
+            if (selectedIdx !== reqIdx) return;
+            lastGeometry = await res.json();
+            renderSuggestions();
+        } catch (e) {
+            $("kpSuggest").innerHTML = "";
+        }
+    }, 150);
+}
+
+const SUGGESTION_FIELDS = [
+    ["impaction", "Açı", "impactionGroup", g => g.angle !== undefined ? `${g.angle}° · ${g.reference}` : ""],
+    ["depth", "Derinlik", "depthGroup", () => ""],
+    ["ramus", "Ramus", "ramusGroup", g => g.space_ratio !== undefined ? `boşluk/genişlik ${g.space_ratio}` : ""],
+    ["nerve", "Sinir", "nerveGroup", g => g.gap_ratio !== undefined ? `mesafe/boy ${g.gap_ratio}` : ""],
+];
+
+function renderSuggestions() {
+    const box = $("kpSuggest");
+    box.innerHTML = "";
+    const g = lastGeometry;
+    const det = currentDet();
+    if (!g || !det || !Object.keys(det.keypoints).length) return;
+
+    SUGGESTION_FIELDS.forEach(([key, name, group, metric]) => {
+        const r = g[key];
+        if (!r) return;
+        const applied = getRadio(group) === r.value;
+        const row = document.createElement("div");
+        row.className = "sg-row" + (applied ? " applied" : "");
+        const left = document.createElement("div");
+        left.innerHTML = `<span class="sg-name">${name}</span> `;
+        const val = document.createElement("span");
+        val.className = "sg-val";
+        val.textContent = r.value;
+        const m = document.createElement("span");
+        m.className = "sg-metric";
+        m.textContent = metric(r);
+        left.append(val, m);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = applied ? "seçili" : "uygula";
+        btn.addEventListener("click", () => { setRadio(group, r.value); renderSuggestions(); });
+        row.append(left, btn);
+        box.appendChild(row);
+    });
+
+    if (g.missing && g.missing.length) {
+        const note = document.createElement("div");
+        note.className = "sg-note";
+        const names = g.missing.map(n => (kpSchema.find(k => k.name === n) || {}).label || n);
+        note.textContent = `Eksik nokta: ${names.join(", ")}`;
+        box.appendChild(note);
+    }
 }

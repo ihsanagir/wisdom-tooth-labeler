@@ -11,6 +11,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from geometry import KEYPOINTS
+
 # Kalıcı etiket depolama dizini: Railway Volume için /data/labels_clinical
 LABELS_DIR = Path(os.getenv("LABELS_DIR", "/data/labels_clinical" if Path("/data").exists() else "labels_clinical"))
 
@@ -25,7 +27,8 @@ def _label_file(image_name: str) -> Path:
 
 def save_label(image_name: str, bbox_index: int, bbox: list,
                impaction: str, ramus: str, depth: str,
-               root: str = "Normal/Konik", nerve: str = "Uzak", notes: str = "") -> dict:
+               root: str = "Normal/Konik", nerve: str = "Uzak", notes: str = "",
+               keypoints: dict = None, jaw: str = None) -> dict:
     """
     Bir diş tespiti için klinik etiket kaydeder.
     """
@@ -51,6 +54,8 @@ def save_label(image_name: str, bbox_index: int, bbox: list,
         "root": root,
         "nerve": nerve,
         "notes": notes,
+        "keypoints": {k: v for k, v in (keypoints or {}).items() if k in KEYPOINTS and v},
+        "jaw": jaw,
         "labeled_at": str(datetime.now()),
     }
 
@@ -81,12 +86,8 @@ def delete_label_box(image_name: str, bbox_index: int) -> dict:
     with open(lf, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    # İndeksler sabit kimliktir; yeniden numaralandırmak ön yüzle eşleşmeyi bozar
     labels = [l for l in data.get("labels", []) if l["bbox_index"] != bbox_index]
-
-    # Bbox index'lerini yeniden sırala (1, 2, 3...)
-    for idx, l in enumerate(labels, start=1):
-        l["bbox_index"] = idx
-
     data["labels"] = labels
     data["updated_at"] = str(datetime.now())
 
@@ -166,6 +167,15 @@ def export_yolo_dataset(images_dir: Path) -> io.BytesIO:
         # data.yaml ekle
         yaml_content = "names:\n  0: wisdom_tooth\nnc: 1\n"
         zip_file.writestr("dataset/data.yaml", yaml_content)
+        # YOLO-pose: noktalar anatomik roller olduğu için yatay çevirmede yer değiştirmez
+        n_kp = len(KEYPOINTS)
+        zip_file.writestr(
+            "dataset/data_pose.yaml",
+            "names:\n  0: wisdom_tooth\nnc: 1\n"
+            f"kpt_shape: [{n_kp}, 3]\n"
+            f"flip_idx: {list(range(n_kp))}\n"
+            f"# nokta sırası: {', '.join(KEYPOINTS)}\n",
+        )
 
         if not LABELS_DIR.exists():
             zip_buffer.seek(0)
@@ -199,6 +209,7 @@ def export_yolo_dataset(images_dir: Path) -> io.BytesIO:
 
             # YOLO etiketlerini oluştur (.txt)
             yolo_lines = []
+            pose_lines = []
             for l in labels:
                 bbox = l.get("bbox", [])
                 if len(bbox) == 4:
@@ -208,11 +219,21 @@ def export_yolo_dataset(images_dir: Path) -> io.BytesIO:
                     yc = ((y1 + y2) / 2.0) / h
                     bw = (x2 - x1) / w
                     bh = (y2 - y1) / h
-                    yolo_lines.append(f"0 {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}")
+                    box = f"0 {xc:.6f} {yc:.6f} {bw:.6f} {bh:.6f}"
+                    yolo_lines.append(box)
+
+                    # Görünürlük: 2 = işaretli, 0 = işaretlenmemiş / uygulanamaz
+                    kp = l.get("keypoints") or {}
+                    parts = []
+                    for name in KEYPOINTS:
+                        pt = kp.get(name)
+                        parts.append(f"{pt[0] / w:.6f} {pt[1] / h:.6f} 2" if pt else "0 0 0")
+                    pose_lines.append(box + " " + " ".join(parts))
 
             if yolo_lines:
                 txt_name = f"{img_path.stem}.txt"
                 zip_file.writestr(f"dataset/labels/{txt_name}", "\n".join(yolo_lines))
+                zip_file.writestr(f"dataset/labels_pose/{txt_name}", "\n".join(pose_lines))
 
             # Klinik JSON detaylarını da sakla
             zip_file.writestr(f"dataset/clinical_json/{json_file.name}", json.dumps(data, ensure_ascii=False, indent=2))
