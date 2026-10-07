@@ -81,7 +81,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 @app.get("/")
 async def serve_frontend():
-    return RedirectResponse(url="/label")
+    return FileResponse("static/index.html")
 
 
 
