@@ -10,6 +10,8 @@ APP_VERSION = "1.2.0"
 # Sızıntısız yeniden eğitim tamamlanınca buradaki yol güncellenecek.
 MODEL_PATH = os.getenv("MODEL_PATH", "trained_models/disprojesi52/weights/best.pt")
 CONFIDENCE_THRESHOLD = 0.35  # 0.30 → 0.35 (post-filter ile birlikte daha dengeli)
+# Sunucuda GPU yok; lokalde de eğitimle GPU belleği paylaşılmasın diye varsayılan CPU
+INFERENCE_DEVICE = os.getenv("INFERENCE_DEVICE", "cpu")
 MAX_DETECTIONS = 4  # Maksimum tespit edilecek diş sayısı (post-filter de ayrıca sınırlar)
 
 # --- Sunucu Ayarları ---

@@ -3,118 +3,189 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Yapay zeka destekli yirmilik diş karar destek sistemi. Panoramik röntgen görüntülerinden otomatik diş tespiti ve tedavi önerisi.">
-    <title>Akıllı Yirmilik Diş Karar Destek Sistemi</title>
-    <link rel="stylesheet" href="/static/styles.css?v=7">
+    <meta name="description" content="Panoramik röntgenden yirmilik diş tespiti, Winter / Pell & Gregory analizi ve Pederson zorluk değerlendirmesi.">
+    <title>Yirmilik — Karar Destek</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/app.css?v=2">
 </head>
 <body>
-    <div class="app-container">
-        <!-- Header -->
-        <header class="header">
-            <h1>🦷 Akıllı Yirmilik Diş Karar Destek Sistemi</h1>
-            <p>Yapay zeka ile tespit, otomatik parametre analizi ve tedavi önerisi</p>
-        </header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+        <symbol id="i-tooth" viewBox="0 0 24 24"><path d="M7 3c-2.2 0-4 1.9-4 4.4 0 2.3.9 3.6 1.5 5.2.7 1.9.8 4.6 1.4 6.7.4 1.4 1 2.7 2 2.7 1.6 0 1.6-4.2 2.4-6 .3-.7.8-1 1.7-1s1.4.3 1.7 1c.8 1.8.8 6 2.4 6 1 0 1.6-1.3 2-2.7.6-2.1.7-4.8 1.4-6.7.6-1.6 1.5-2.9 1.5-5.2C21 4.9 19.2 3 17 3c-1.9 0-2.9 1-5 1S8.9 3 7 3z"/></symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V3m0 0 4.5 4.5M12 3 7.5 7.5M4 15v3a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3"/></symbol>
+        <symbol id="i-scan" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3m8 0h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 1-2 2h-3m-8 0H5a2 2 0 0 1-2-2v-3M7 12h10"/></symbol>
+        <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="i-fit" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+        <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+        <symbol id="i-contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18a9 9 0 0 0 0-18z" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="i-invert" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 21 21 3" /><path d="M3 21h18V3z" fill="currentColor" stroke="none" opacity=".55"/></symbol>
+        <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/></symbol>
+        <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+        <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></symbol>
+    </defs>
+</svg>
 
-        <!-- Main Grid: Image + Patient Profile -->
-        <div class="main-grid">
-            <!-- Left: Image Upload & Detection -->
-            <div class="card">
-                <div class="card-title">
-                    <span class="icon">📷</span> Röntgen Analizi
-                </div>
-
-                <!-- Upload Area -->
-                <div class="upload-area" id="uploadArea">
-                    <span class="upload-icon">🩻</span>
-                    <p class="upload-text">
-                        Röntgen görüntüsünü <strong>sürükle &amp; bırak</strong><br>
-                        veya tıklayarak dosya seç
-                    </p>
-                    <input type="file" id="fileInput" accept="image/jpeg,image/png">
-                </div>
-
-                <!-- Image Preview -->
-                <div class="image-preview" id="imagePreview">
-                    <img id="previewImg" src="" alt="Röntgen">
-                    <!-- Canvas: sadece bbox'lar çizilir, görüntüye dokunmaz -->
-                    <canvas id="overlayCanvas"></canvas>
-                    <button class="clear-btn" id="clearBtn" title="Temizle">✕</button>
-
-                    <!-- Overlay Badge (analiz yapıldıktan sonra görünür) -->
-                    <div class="overlay-badge" id="overlayBadge">
-                        <span class="overlay-badge-dot"></span>
-                        <span id="overlayBadgeText">Analiz Hazır</span>
-                    </div>
-                </div>
-
-                <!-- Buton Grubu -->
-                <div class="btn-group" id="btnGroup">
-                    <!-- Tespit Butonu -->
-                    <button class="detect-btn" id="detectBtn" disabled>
-                        <span class="spinner" id="spinner"></span>
-                        <span id="detectText">🔍 20'lik Dişleri Analiz Et</span>
-                    </button>
-
-                    <!-- Overlay Toggle Butonu (sadece analiz sonrası görünür) -->
-                    <button class="overlay-toggle-btn" id="overlayToggleBtn" style="display:none;">
-                        <span id="overlayIcon">👁</span>
-                        <span id="overlayText">Tespitleri Göster</span>
-                    </button>
-                </div>
-
-                <!-- Detection Summary -->
-                <div class="detection-summary" id="detectionSummary"></div>
-
-                <!-- Klavye İpucu -->
-                <div class="keyboard-hint" id="keyboardHint" style="display:none;">
-                    <span>⌨ <kbd>Space</kbd> tespit göster/gizle &nbsp;·&nbsp; <kbd>Esc</kbd> temizle</span>
-                </div>
-            </div>
-
-            <!-- Right: Patient Profile -->
-            <div class="card">
-                <div class="card-title">
-                    <span class="icon">👤</span> Hasta Profili
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="gender">Cinsiyet</label>
-                        <select id="gender"></select>
-                    </div>
-                    <div class="form-group">
-                        <label for="age">Yaş Aralığı</label>
-                        <select id="age"></select>
-                    </div>
-                </div>
-
-                <div class="form-group full-width">
-                    <label for="mouthOpening">Ağız Açıklığı</label>
-                    <select id="mouthOpening"></select>
-                </div>
-
-            </div>
+<header class="topbar">
+    <div class="brand">
+        <svg class="brand-mark"><use href="#i-tooth"/></svg>
+        <div>
+            <div class="brand-name">Yirmilik</div>
+            <div class="brand-sub">Gömülü 3. molar karar destek</div>
         </div>
-
-        <!-- Teeth Section -->
-        <div class="teeth-section">
-            <div class="section-title">
-                <span class="icon">🦷</span> Diş Analiz Sonuçları
-            </div>
-
-            <div id="teethContainer">
-                <div class="no-detection-msg" id="noDetection">
-                    Henüz tespit yapılmadı. Röntgen görüntüsü yükleyip <strong>"20'lik Dişleri Analiz Et"</strong> butonuna tıklayın.
-                </div>
-            </div>
-        </div>
-
-        <!-- Footer -->
-        <footer class="footer">
-            Akıllı Yirmilik Diş Karar Destek Sistemi — Karar destek aracıdır, klinik karar klinisyene aittir.
-        </footer>
     </div>
+    <div class="topbar-right">
+        <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Bağlanıyor…</span></span>
+        <a class="link-btn" href="/label"><svg class="ico"><use href="#i-tag"/></svg>Etiketleme</a>
+    </div>
+</header>
 
-    <script src="/static/app.js?v=8"></script>
+<main class="workspace">
+    <!-- ── Sol: Hasta + Çene Haritası ───────────────────────────── -->
+    <aside class="panel panel-left" aria-label="Hasta bilgileri">
+        <section class="block">
+            <h2 class="block-title">Hasta</h2>
+            <div class="field">
+                <span class="field-label">Cinsiyet</span>
+                <div class="segmented" id="seg-gender" role="radiogroup" aria-label="Cinsiyet"></div>
+            </div>
+            <div class="field">
+                <span class="field-label">Yaş</span>
+                <div class="segmented" id="seg-age" role="radiogroup" aria-label="Yaş"></div>
+            </div>
+            <div class="field">
+                <span class="field-label">Ağız açıklığı</span>
+                <div class="segmented vertical" id="seg-mouth" role="radiogroup" aria-label="Ağız açıklığı"></div>
+            </div>
+        </section>
+
+        <section class="block">
+            <h2 class="block-title">Çene haritası <span class="muted">FDI</span></h2>
+            <svg class="arch" id="archMap" viewBox="0 -4 260 108" role="img" aria-label="Yirmilik diş konumları"></svg>
+            <p class="arch-caption">Görüntünün solu hastanın <b>sağıdır</b>.</p>
+        </section>
+
+        <section class="block" id="summaryBlock" hidden>
+            <h2 class="block-title">Tespit özeti</h2>
+            <dl class="stats">
+                <div><dt>Yirmilik diş</dt><dd id="statCount">–</dd></div>
+                <div><dt>Filtrelenen</dt><dd id="statFiltered">–</dd></div>
+            </dl>
+        </section>
+    </aside>
+
+    <!-- ── Orta: Röntgen görüntüleyici ──────────────────────────── -->
+    <section class="viewer" aria-label="Röntgen görüntüleyici">
+        <div class="toolbar" role="toolbar" aria-label="Görüntüleyici araçları">
+            <div class="tool-group">
+                <button class="btn ghost" id="btnUpload" title="Röntgen yükle"><svg class="ico"><use href="#i-upload"/></svg><span>Yükle</span></button>
+                <button class="btn primary" id="btnAnalyze" disabled><svg class="ico"><use href="#i-scan"/></svg><span id="analyzeLabel">Analiz et</span></button>
+            </div>
+            <div class="tool-group" data-needs-image>
+                <button class="icon-btn" id="btnZoomOut" title="Uzaklaştır (−)" aria-label="Uzaklaştır"><svg class="ico"><use href="#i-minus"/></svg></button>
+                <span class="zoom-readout" id="zoomReadout">100%</span>
+                <button class="icon-btn" id="btnZoomIn" title="Yakınlaştır (+)" aria-label="Yakınlaştır"><svg class="ico"><use href="#i-plus"/></svg></button>
+                <button class="icon-btn" id="btnFit" title="Sığdır (0)" aria-label="Sığdır"><svg class="ico"><use href="#i-fit"/></svg></button>
+            </div>
+            <div class="tool-group" data-needs-image>
+                <label class="slider" title="Parlaklık"><svg class="ico"><use href="#i-sun"/></svg><input type="range" id="rngBrightness" min="50" max="180" value="100" aria-label="Parlaklık"></label>
+                <label class="slider" title="Kontrast"><svg class="ico"><use href="#i-contrast"/></svg><input type="range" id="rngContrast" min="50" max="220" value="100" aria-label="Kontrast"></label>
+                <button class="icon-btn toggle" id="btnInvert" title="Negatif (I)" aria-label="Negatif görünüm" aria-pressed="false"><svg class="ico"><use href="#i-invert"/></svg></button>
+            </div>
+            <div class="tool-group layers" data-needs-result>
+                <svg class="ico muted"><use href="#i-layers"/></svg>
+                <button class="chip toggle" data-layer="boxes" aria-pressed="true">Kutular</button>
+                <button class="chip toggle" data-layer="axis" aria-pressed="true">Eksen</button>
+                <button class="chip toggle" data-layer="occlusal" aria-pressed="true">Oklüzal</button>
+            </div>
+        </div>
+
+        <div class="stage" id="stage">
+            <div class="dropzone" id="dropzone">
+                <div class="dropzone-inner">
+                    <svg class="dropzone-art" viewBox="0 0 120 60" aria-hidden="true">
+                        <path d="M10 22c14-12 86-12 100 0M14 38c14 12 78 12 92 0" />
+                        <g class="dz-teeth">
+                            <rect x="16" y="18" width="9" height="12" rx="3"/><rect x="95" y="18" width="9" height="12" rx="3"/>
+                            <rect x="16" y="31" width="9" height="12" rx="3"/><rect x="95" y="31" width="9" height="12" rx="3"/>
+                        </g>
+                    </svg>
+                    <p class="dz-title">Panoramik röntgeni buraya bırakın</p>
+                    <p class="dz-sub">veya <button class="text-btn" id="btnBrowse">dosya seçin</button> · JPG / PNG</p>
+                </div>
+            </div>
+            <div class="canvas" id="canvas" hidden>
+                <img id="xray" alt="Panoramik röntgen" draggable="false">
+                <svg id="overlay" class="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+            <div class="stage-hint" data-needs-image hidden>
+                <kbd>Tekerlek</kbd> yakınlaştır · <kbd>Sürükle</kbd> kaydır · <kbd>Space</kbd> katmanlar · <kbd>I</kbd> negatif · <kbd>Esc</kbd> temizle
+            </div>
+            <div class="stage-status" id="stageStatus" hidden></div>
+            <button class="icon-btn stage-clear" id="btnClear" title="Görüntüyü kaldır" aria-label="Görüntüyü kaldır" hidden><svg class="ico"><use href="#i-x"/></svg></button>
+        </div>
+        <input type="file" id="fileInput" accept="image/jpeg,image/png" hidden>
+    </section>
+
+    <!-- ── Sağ: Diş detayları ───────────────────────────────────── -->
+    <aside class="panel panel-right" aria-label="Diş değerlendirmesi">
+        <div class="empty-state" id="teethEmpty">
+            <svg class="empty-ico"><use href="#i-tooth"/></svg>
+            <p>Röntgen yükleyip <b>Analiz et</b>'e bastığınızda tespit edilen yirmilik dişler burada listelenir.</p>
+        </div>
+
+        <div id="teethPanel" hidden>
+            <div class="tooth-tabs" id="toothTabs" role="tablist" aria-label="Tespit edilen dişler"></div>
+
+            <div class="tooth-detail" id="toothDetail">
+                <div class="detail-head">
+                    <div class="fdi-badge" id="dFdi">38</div>
+                    <div>
+                        <div class="detail-title" id="dTitle">Alt çene · sol</div>
+                        <div class="detail-sub" id="dSub">Tespit güveni %92</div>
+                    </div>
+                </div>
+
+                <h3 class="section-label">Görüntüden otomatik <span class="muted">— hekim onayı gerekir</span></h3>
+                <div class="finding" id="f-impaction">
+                    <label for="sel-impaction">Gömülülük açısı <span class="muted">Winter</span></label>
+                    <select id="sel-impaction"></select>
+                    <div class="conf"><span class="conf-bar"><i></i></span><span class="conf-text"></span></div>
+                </div>
+                <div class="finding" id="f-depth">
+                    <label for="sel-depth">Derinlik <span class="muted">Pell &amp; Gregory</span></label>
+                    <select id="sel-depth"></select>
+                    <div class="conf"><span class="conf-bar"><i></i></span><span class="conf-text"></span></div>
+                </div>
+                <div class="finding" id="f-ramus">
+                    <label for="sel-ramus">Ramus ilişkisi <span class="muted">Pell &amp; Gregory</span></label>
+                    <select id="sel-ramus"></select>
+                    <div class="conf"><span class="conf-bar"><i></i></span><span class="conf-text"></span></div>
+                </div>
+
+                <h3 class="section-label">Klinik değerlendirme</h3>
+                <div class="field">
+                    <span class="field-label">Kök formu</span>
+                    <div class="segmented" id="seg-root" role="radiogroup" aria-label="Kök formu"></div>
+                </div>
+                <div class="field">
+                    <span class="field-label">Sinir (IAN) komşuluğu</span>
+                    <div class="segmented" id="seg-nerve" role="radiogroup" aria-label="Sinir komşuluğu"></div>
+                </div>
+
+                <div class="result" id="result" aria-live="polite"></div>
+            </div>
+        </div>
+    </aside>
+</main>
+
+<footer class="footnote">
+    Karar destek aracıdır; tanı koymaz. Klinik karar hekime aittir. Otomatik bulgular sezgisel görüntü analizine dayanır.
+</footer>
+
+<script src="/static/app.js?v=10"></script>
 </body>
 </html>

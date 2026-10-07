@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-from config import MODEL_PATH, CONFIDENCE_THRESHOLD, MAX_DETECTIONS, HOST, PORT, APP_VERSION
+from config import MODEL_PATH, CONFIDENCE_THRESHOLD, MAX_DETECTIONS, HOST, PORT, APP_VERSION, INFERENCE_DEVICE
 from config import (
     GENDER_OPTIONS, AGE_OPTIONS, MOUTH_OPENING_OPTIONS,
     IMPACTION_OPTIONS, RAMUS_OPTIONS, DEPTH_OPTIONS,
@@ -106,7 +106,7 @@ def _safe_image_path(image_name: str):
 
 def _run_model(image):
     """YOLO çıkarımı — güvene göre azalan sırada [(xyxy, conf), ...] döndürür."""
-    results = model(image, conf=CONFIDENCE_THRESHOLD, verbose=False)
+    results = model(image, conf=CONFIDENCE_THRESHOLD, device=INFERENCE_DEVICE, verbose=False)
     all_boxes = []
     for result in results:
         boxes = result.boxes.xyxy.cpu().numpy()

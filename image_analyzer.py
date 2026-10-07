@@ -70,7 +70,7 @@ def analyze_tooth_automatically(bbox, image, all_bboxes=None):
         all_bboxes: list of [x1,y1,x2,y2] — tüm tespit edilen dişlerin bbox'ları
 
     Returns:
-        dict: {jaw, jaw_confidence, impaction, impaction_confidence, angle_value,
+        dict: {fdi, jaw, jaw_confidence, impaction, impaction_confidence, angle_value,
                depth, depth_confidence, ramus, ramus_confidence,
                tooth_axis, occlusal_y}
     """
@@ -91,6 +91,7 @@ def analyze_tooth_automatically(bbox, image, all_bboxes=None):
         ramus, ramus_conf = detect_ramus_relation(bbox, gray, img_w, img_h)
 
     return {
+        "fdi": fdi_number(bbox, img_w, jaw),
         "jaw": jaw,
         "jaw_confidence": round(jaw_conf, 2),
         "impaction": impaction,
@@ -103,6 +104,16 @@ def analyze_tooth_automatically(bbox, image, all_bboxes=None):
         "tooth_axis": axis,
         "occlusal_y": occlusal_y,
     }
+
+
+def fdi_number(bbox, img_w, jaw):
+    """
+    FDI diş numarası. Panoramik röntgende görüntünün solu hastanın sağıdır:
+    sol-üst 18, sağ-üst 28, sağ-alt 38, sol-alt 48.
+    """
+    if _is_left(bbox, img_w):
+        return 18 if jaw == JAW_UPPER else 48
+    return 28 if jaw == JAW_UPPER else 38
 
 
 def _same_box(a, b):

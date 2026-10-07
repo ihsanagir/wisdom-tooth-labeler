@@ -1,511 +1,644 @@
 /**
- * Akıllı Yirmilik Diş Karar Destek Sistemi — Frontend
- * v3: Canvas Tabanlı Bbox Overlay (görüntüye dokunmaz)
+ * Yirmilik — Karar Destek ön yüzü
+ * Röntgen görüntüleyici (zoom/pan/filtre), SVG anotasyon katmanı,
+ * FDI çene haritası ve diş bazlı Pederson değerlendirmesi.
  */
 
-// --- State ---
-let uploadedFile = null;
-let dropdownOptions = {};
-
-// Overlay state
-let originalImageSrc = null;   // Ham röntgen — asla kaybolmaz
-let detectionResults = [];     // API'den gelen detections (bbox koordinatları)
-let overlayVisible = false;
-let analysisReady = false;
-let currentOpacity = 0.80;     // Varsayılan kutu opaklığı
-
-// --- DOM Elements ---
 const $ = (id) => document.getElementById(id);
-const uploadArea       = $('uploadArea');
-const fileInput        = $('fileInput');
-const imagePreview     = $('imagePreview');
-const previewImg       = $('previewImg');
-const overlayCanvas    = $('overlayCanvas');
-const clearBtn         = $('clearBtn');
-const detectBtn        = $('detectBtn');
-const detectText       = $('detectText');
-const spinner          = $('spinner');
-const detectionSummary = $('detectionSummary');
-const teethContainer   = $('teethContainer');
-const noDetection      = $('noDetection');
-const overlayToggleBtn = $('overlayToggleBtn');
-const overlayIcon      = $('overlayIcon');
-const overlayText      = $('overlayText');
-const overlayBadge     = $('overlayBadge');
-const overlayBadgeText = $('overlayBadgeText');
-const keyboardHint     = $('keyboardHint');
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const LOW_DET_CONF = 0.55;     // altı: kesikli kutu
+const REVIEW_CONF = 0.5;       // altı: "hekim kontrolü" uyarısı
 
-// Canvas context
-const ctx = overlayCanvas ? overlayCanvas.getContext('2d') : null;
+const state = {
+    options: null,
+    patient: { gender: null, age: null, mouth_opening: null },
+    file: null,
+    imgURL: null,
+    nat: { w: 0, h: 0 },
+    view: { s: 1, x: 0, y: 0, fitS: 1 },
+    adjust: { b: 100, c: 100, inv: false },
+    layers: { boxes: true, axis: true, occlusal: true },
+    layersHidden: false,
+    detections: [],
+    teeth: [],          // detections ile aynı sırada: {impaction, depth, ramus, root, nerve, edited:{}, result}
+    selected: -1,
+};
 
-// --- Init ---
+const el = {
+    stage: $('stage'), canvas: $('canvas'), img: $('xray'), overlay: $('overlay'),
+    dropzone: $('dropzone'), fileInput: $('fileInput'),
+    btnAnalyze: $('btnAnalyze'), analyzeLabel: $('analyzeLabel'),
+    zoomReadout: $('zoomReadout'), stageStatus: $('stageStatus'), btnClear: $('btnClear'),
+    toolbar: document.querySelector('.toolbar'),
+};
+
+// ════════════════════════════════════════════════════════════════════════
+// Başlangıç
+// ════════════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadOptions();
-    setupUploadHandlers();
-    setupKeyboardShortcuts();
+    updateToolbarState();
+    renderArch();
+    bindViewer();
+    bindKeyboard();
+    checkHealth();
 
-    // Görüntü yüklenince canvas boyutunu güncelle
-    previewImg.addEventListener('load', syncCanvasSize);
-    window.addEventListener('resize', () => {
-        if (overlayVisible) drawBoxes();
-    });
-});
-
-/**
- * Canvas boyutunu görüntü elementinin gerçek boyutuyla eşitle.
- */
-function syncCanvasSize() {
-    const rect = previewImg.getBoundingClientRect();
-    overlayCanvas.width  = previewImg.naturalWidth;
-    overlayCanvas.height = previewImg.naturalHeight;
-}
-
-/**
- * API'den dönen detections[] kullanarak canvas üzerine bbox çizer.
- * Görüntüye tek piksel dokunmaz.
- */
-function drawBoxes() {
-    if (!ctx || !detectionResults.length) return;
-
-    // Canvas piksel boyutunu görüntünün doğal boyutuyla eşitle
-    overlayCanvas.width  = previewImg.naturalWidth;
-    overlayCanvas.height = previewImg.naturalHeight;
-
-    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-    detectionResults.forEach((det) => {
-        const [x1, y1, x2, y2] = det.bbox;
-        const conf = det.confidence;
-        const w = x2 - x1;
-        const h = y2 - y1;
-
-        // Confidence'a göre renk
-        let r, g, b;
-        if (conf >= 0.75) { r = 0;   g = 210; b = 110; }  // Yeşil
-        else if (conf >= 0.55) { r = 30; g = 170; b = 255; }  // Mavi
-        else               { r = 255; g = 100; b = 80;  }  // Kırmızı
-
-        // Bbox arka plan (çok hafif dolgu)
-        ctx.globalAlpha = currentOpacity * 0.12;
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-        ctx.fillRect(x1, y1, w, h);
-
-        // Bbox kenar çizgisi
-        ctx.globalAlpha = currentOpacity;
-        ctx.strokeStyle = `rgb(${r},${g},${b})`;
-        ctx.lineWidth = Math.max(2, overlayCanvas.width * 0.002);
-        ctx.strokeRect(x1, y1, w, h);
-
-        // Etiket arka planı (Sadece numara, yüzdelik kaldırıldı, font küçültüldü)
-        const label    = `${det.index}. Diş`;
-        const fontSize = Math.max(10, overlayCanvas.width * 0.011);
-        ctx.font       = `600 ${fontSize}px Inter, sans-serif`;
-        const textW    = ctx.measureText(label).width;
-        const padX     = fontSize * 0.5;
-        const padY     = fontSize * 0.35;
-        const tagH     = fontSize + padY * 2;
-
-        ctx.globalAlpha = currentOpacity * 0.88;
-        ctx.fillStyle   = `rgb(${r},${g},${b})`;
-        ctx.beginPath();
-        ctx.roundRect(x1, y1 - tagH, textW + padX * 2, tagH, [4, 4, 0, 0]);
-        ctx.fill();
-
-        // Etiket metni
-        ctx.globalAlpha = currentOpacity;
-        ctx.fillStyle   = '#ffffff';
-        ctx.fillText(label, x1 + padX, y1 - padY);
-    });
-
-    // Sonraki çizimler için alpha'yı sıfırla
-    ctx.globalAlpha = 1;
-}
-
-/**
- * Canvas'ı temizler ve gizler (overlay kapalıyken).
- */
-function clearCanvas() {
-    if (ctx) ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-    overlayCanvas.style.display = 'none';
-}
-
-// --- API Options ---
-async function loadOptions() {
     try {
-        const res = await fetch('/api/options');
-        dropdownOptions = await res.json();
-        fillSelect('gender', dropdownOptions.gender);
-        fillSelect('age', dropdownOptions.age);
-        fillSelect('mouthOpening', dropdownOptions.mouth_opening);
-    } catch (err) {
-        console.error('Seçenekler yüklenemedi:', err);
-    }
-}
-
-function fillSelect(id, options) {
-    const sel = $(id);
-    if (!sel || !options) return;
-    sel.innerHTML = '';
-    options.forEach(opt => {
-        const o = document.createElement('option');
-        o.value = opt; o.textContent = opt;
-        sel.appendChild(o);
-    });
-}
-
-// --- Upload Handlers ---
-function setupUploadHandlers() {
-    uploadArea.addEventListener('click', () => fileInput.click());
-
-    uploadArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        uploadArea.classList.add('dragover');
-    });
-    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-    uploadArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-        if (e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
-    });
-
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) handleFile(e.target.files[0]);
-    });
-
-    clearBtn.addEventListener('click', clearImage);
-    detectBtn.addEventListener('click', runDetection);
-    overlayToggleBtn.addEventListener('click', toggleOverlay);
-}
-
-function handleFile(file) {
-    // Backend yalnızca JPG/PNG çözebiliyor.
-    if (!['image/jpeg', 'image/png'].includes(file.type)) {
-        alert('Lütfen JPG veya PNG formatında bir röntgen görüntüsü seçin.');
+        state.options = await fetch('/api/options').then(r => r.json());
+    } catch {
+        showStatus('Sunucuya bağlanılamadı.', true);
         return;
     }
+    const o = state.options;
+    state.patient = { gender: o.gender[0], age: o.age[0], mouth_opening: o.mouth_opening[0] };
+    segmented('seg-gender', o.gender, state.patient.gender, v => setPatient('gender', v));
+    segmented('seg-age', o.age, state.patient.age, v => setPatient('age', v),
+        v => v === '>30' ? 'risk-moderate' : '');
+    segmented('seg-mouth', o.mouth_opening, state.patient.mouth_opening, v => setPatient('mouth_opening', v),
+        v => v.startsWith('Çok') ? 'risk-major' : v.startsWith('Kısıtlı') ? 'risk-moderate' : '');
+});
 
-    uploadedFile = file;
-    resetOverlayState();
+async function checkHealth() {
+    const pill = $('statusPill');
+    try {
+        const h = await fetch('/health').then(r => r.json());
+        pill.classList.add(h.model_loaded ? 'ok' : 'bad');
+        $('statusText').textContent = h.model_loaded ? `Model hazır · v${h.version}` : 'Model yüklenemedi';
+    } catch {
+        pill.classList.add('bad');
+        $('statusText').textContent = 'Sunucu yanıt vermiyor';
+    }
+}
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        originalImageSrc = e.target.result;
-        previewImg.src = originalImageSrc;
-        previewImg.style.display = 'block';
-        imagePreview.style.display = 'block';
-        uploadArea.style.display = 'none';
-        detectBtn.disabled = false;
+function setPatient(key, value) {
+    state.patient[key] = value;
+    state.teeth.forEach((_, i) => evaluate(i));
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Segment kontrolü (erişilebilir radio grubu)
+// ════════════════════════════════════════════════════════════════════════
+function segmented(containerId, options, value, onChange, riskClass = () => '') {
+    const box = $(containerId);
+    box.innerHTML = '';
+    options.forEach(opt => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('role', 'radio');
+        b.setAttribute('aria-checked', String(opt === value));
+        b.tabIndex = opt === value ? 0 : -1;
+        b.textContent = opt;
+        const rc = riskClass(opt);
+        if (rc) b.classList.add(rc);
+        b.addEventListener('click', () => select(b, opt));
+        box.appendChild(b);
+    });
+    box.onkeydown = (e) => {
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+        e.preventDefault();
+        const btns = [...box.children];
+        const cur = btns.findIndex(b => b.getAttribute('aria-checked') === 'true');
+        const step = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 1;
+        const next = btns[(cur + step + btns.length) % btns.length];
+        next.click();
+        next.focus();
     };
-    reader.readAsDataURL(file);
+    function select(btn, opt) {
+        [...box.children].forEach(b => {
+            b.setAttribute('aria-checked', String(b === btn));
+            b.tabIndex = b === btn ? 0 : -1;
+        });
+        onChange(opt);
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Görüntü yükleme
+// ════════════════════════════════════════════════════════════════════════
+function loadFile(file) {
+    if (!file) return;
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+        showStatus('Lütfen JPG veya PNG formatında bir röntgen seçin.', true);
+        return;
+    }
+    clearImage();
+    state.file = file;
+    state.imgURL = URL.createObjectURL(file);
+    el.img.onload = () => {
+        state.nat = { w: el.img.naturalWidth, h: el.img.naturalHeight };
+        el.img.width = state.nat.w;
+        el.img.height = state.nat.h;
+        el.overlay.setAttribute('viewBox', `0 0 ${state.nat.w} ${state.nat.h}`);
+        el.overlay.setAttribute('width', state.nat.w);
+        el.overlay.setAttribute('height', state.nat.h);
+        el.dropzone.hidden = true;
+        el.canvas.hidden = false;
+        el.btnClear.hidden = false;
+        el.stage.classList.remove('empty');
+        el.btnAnalyze.disabled = false;
+        fitView();
+        updateToolbarState();
+    };
+    el.img.src = state.imgURL;
 }
 
 function clearImage() {
-    uploadedFile = null;
-    originalImageSrc = null;
-    detectionResults = [];
-    analysisReady = false;
-
-    previewImg.src = '';
-    previewImg.style.display = 'none';
-    clearCanvas();
-
-    imagePreview.style.display = 'none';
-    uploadArea.style.display = 'block';
-    detectBtn.disabled = true;
-    fileInput.value = '';
-
-    resetOverlayState();
-
-    teethContainer.innerHTML = '';
-    noDetection.style.display = 'block';
-    teethContainer.appendChild(noDetection);
-    detectionSummary.style.display = 'none';
+    if (state.imgURL) URL.revokeObjectURL(state.imgURL);
+    Object.assign(state, { file: null, imgURL: null, detections: [], teeth: [], selected: -1 });
+    el.img.removeAttribute('src');
+    el.overlay.innerHTML = '';
+    el.canvas.hidden = true;
+    el.dropzone.hidden = false;
+    el.btnClear.hidden = true;
+    el.stage.classList.add('empty');
+    el.btnAnalyze.disabled = true;
+    el.fileInput.value = '';
+    hideStatus();
+    $('teethPanel').hidden = true;
+    $('teethEmpty').hidden = false;
+    $('summaryBlock').hidden = true;
+    renderArch();
+    updateToolbarState();
 }
 
-function resetOverlayState() {
-    overlayVisible = false;
-    clearCanvas();
-    overlayToggleBtn.style.display = 'none';
-    overlayToggleBtn.classList.remove('overlay-active');
-    overlayIcon.textContent = '👁';
-    overlayText.textContent = 'Tespitleri Göster';
-    overlayBadge.classList.remove('visible');
-    keyboardHint.style.display = 'none';
-    currentOpacity = 0.80;
+function updateToolbarState() {
+    el.toolbar.classList.toggle('no-image', !state.imgURL);
+    el.toolbar.classList.toggle('no-result', !state.detections.length);
+    document.querySelectorAll('.stage-hint').forEach(h => { h.hidden = !state.imgURL; });
 }
 
-// --- Detection ---
+// ════════════════════════════════════════════════════════════════════════
+// Görüntüleyici: zoom / pan / filtre
+// ════════════════════════════════════════════════════════════════════════
+function bindViewer() {
+    $('btnUpload').addEventListener('click', () => el.fileInput.click());
+    $('btnBrowse').addEventListener('click', () => el.fileInput.click());
+    el.fileInput.addEventListener('change', e => loadFile(e.target.files[0]));
+    el.btnClear.addEventListener('click', clearImage);
+    el.btnAnalyze.addEventListener('click', runDetection);
+
+    $('btnZoomIn').addEventListener('click', () => zoomAtCenter(1.25));
+    $('btnZoomOut').addEventListener('click', () => zoomAtCenter(0.8));
+    $('btnFit').addEventListener('click', fitView);
+
+    $('rngBrightness').addEventListener('input', e => { state.adjust.b = +e.target.value; applyFilter(); });
+    $('rngContrast').addEventListener('input', e => { state.adjust.c = +e.target.value; applyFilter(); });
+    $('btnInvert').addEventListener('click', toggleInvert);
+
+    document.querySelectorAll('[data-layer]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const key = btn.dataset.layer;
+            state.layers[key] = !state.layers[key];
+            btn.setAttribute('aria-pressed', String(state.layers[key]));
+            applyLayers();
+        });
+    });
+
+    // Sürükle-bırak
+    ['dragenter', 'dragover'].forEach(t => el.stage.addEventListener(t, e => {
+        e.preventDefault();
+        el.dropzone.classList.add('over');
+    }));
+    ['dragleave', 'drop'].forEach(t => el.stage.addEventListener(t, e => {
+        e.preventDefault();
+        el.dropzone.classList.remove('over');
+    }));
+    el.stage.addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+
+    // Tekerlek ile imleç etrafında zoom
+    el.stage.addEventListener('wheel', e => {
+        if (!state.imgURL) return;
+        e.preventDefault();
+        const r = el.stage.getBoundingClientRect();
+        zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+
+    // Sürükleyerek kaydırma; az hareketli tıklama = kutu seçimi
+    let drag = null;
+    el.stage.addEventListener('pointerdown', e => {
+        if (!state.imgURL || e.button !== 0 || e.target.closest('button')) return;
+        drag = { x: e.clientX, y: e.clientY, vx: state.view.x, vy: state.view.y, moved: false,
+                 tooth: e.target.closest('.tooth') };
+        el.stage.setPointerCapture(e.pointerId);
+    });
+    el.stage.addEventListener('pointermove', e => {
+        if (!drag) return;
+        const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+        if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+        drag.moved = true;
+        el.stage.classList.add('dragging');
+        state.view.x = drag.vx + dx;
+        state.view.y = drag.vy + dy;
+        applyView();
+    });
+    const endDrag = () => {
+        if (drag && !drag.moved && drag.tooth) selectTooth(+drag.tooth.dataset.i);
+        drag = null;
+        el.stage.classList.remove('dragging');
+    };
+    el.stage.addEventListener('pointerup', endDrag);
+    el.stage.addEventListener('pointercancel', endDrag);
+
+    window.addEventListener('resize', () => { if (state.imgURL) fitView(); });
+}
+
+function fitView() {
+    const r = el.stage.getBoundingClientRect();
+    const s = Math.min(r.width / state.nat.w, r.height / state.nat.h) * 0.96;
+    state.view = { s, fitS: s, x: (r.width - state.nat.w * s) / 2, y: (r.height - state.nat.h * s) / 2 };
+    applyView();
+}
+
+function zoomAt(factor, cx, cy) {
+    const v = state.view;
+    const ns = Math.min(Math.max(v.s * factor, v.fitS * 0.5), v.fitS * 12);
+    v.x = cx - (cx - v.x) * (ns / v.s);
+    v.y = cy - (cy - v.y) * (ns / v.s);
+    v.s = ns;
+    applyView();
+}
+
+function zoomAtCenter(factor) {
+    const r = el.stage.getBoundingClientRect();
+    zoomAt(factor, r.width / 2, r.height / 2);
+}
+
+function applyView() {
+    const v = state.view;
+    el.canvas.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.s})`;
+    el.zoomReadout.textContent = `${Math.round((v.s / v.fitS) * 100)}%`;
+}
+
+function applyFilter() {
+    const a = state.adjust;
+    el.img.style.filter = `brightness(${a.b}%) contrast(${a.c}%)${a.inv ? ' invert(1)' : ''}`;
+}
+
+function toggleInvert() {
+    state.adjust.inv = !state.adjust.inv;
+    $('btnInvert').setAttribute('aria-pressed', String(state.adjust.inv));
+    applyFilter();
+}
+
+function applyLayers() {
+    const o = el.overlay.classList;
+    o.toggle('hide-boxes', !state.layers.boxes);
+    o.toggle('hide-axis', !state.layers.axis);
+    o.toggle('hide-occlusal', !state.layers.occlusal);
+    o.toggle('hide-all', state.layersHidden);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Tespit
+// ════════════════════════════════════════════════════════════════════════
 async function runDetection() {
-    if (!uploadedFile) return;
-
-    detectBtn.disabled = true;
-    detectText.textContent = 'Analiz ediliyor...';
-    spinner.style.display = 'inline-block';
-    detectionSummary.style.display = 'none';
-
-    // Yeni analiz — eski overlay'i kapat
-    if (overlayVisible) {
-        overlayVisible = false;
-        clearCanvas();
-        overlayToggleBtn.classList.remove('overlay-active');
-        overlayIcon.textContent = '👁';
-        overlayText.textContent = 'Tespitleri Göster';
-    }
+    if (!state.file) return;
+    el.btnAnalyze.disabled = true;
+    el.btnAnalyze.classList.add('loading');
+    el.analyzeLabel.textContent = 'Analiz ediliyor…';
+    showStatus('Röntgen analiz ediliyor…');
 
     try {
-        const formData = new FormData();
-        formData.append('file', uploadedFile);
-        const res = await fetch('/api/detect', { method: 'POST', body: formData });
-
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || 'Tespit başarısız.');
-        }
-
+        const fd = new FormData();
+        fd.append('file', state.file);
+        const res = await fetch('/api/detect', { method: 'POST', body: fd });
         const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Tespit başarısız.');
 
-        // Bbox verilerini sakla — canvas çizimi için
-        detectionResults = data.detections || [];
-        analysisReady = detectionResults.length > 0;
+        state.detections = data.detections || [];
+        state.teeth = state.detections.map(d => ({
+            impaction: d.auto_analysis.impaction,
+            depth: d.auto_analysis.depth,
+            ramus: d.auto_analysis.ramus,
+            root: state.options.root[0],
+            nerve: state.options.nerve[0],
+            edited: {},
+            result: null,
+        }));
 
-        // Özet
-        if (data.count > 0) {
-            let txt = `<strong>${data.count}</strong> yirmilik diş tespit edildi.`;
-            if (data.filtered_count > 0) {
-                txt += `<br><span class="filter-info">🔍 ${data.raw_count} ham tespittten ${data.filtered_count} tanesi anatomik filtre ile kaldırıldı.</span>`;
-            }
-            detectionSummary.innerHTML = txt;
+        $('statCount').textContent = data.count;
+        $('statFiltered').textContent = data.filtered_count;
+        $('summaryBlock').hidden = false;
+
+        if (!state.detections.length) {
+            showStatus('Yirmilik diş tespit edilemedi.', true);
+            $('teethPanel').hidden = true;
+            $('teethEmpty').hidden = false;
         } else {
-            detectionSummary.innerHTML = '⚠️ Tespit edilemedi. Farklı bir görüntü deneyin.';
+            hideStatus();
+            $('teethEmpty').hidden = true;
+            $('teethPanel').hidden = false;
+            renderTabs();
+            selectTooth(0);
+            await Promise.all(state.teeth.map((_, i) => evaluate(i)));
         }
-        detectionSummary.style.display = 'block';
-
-        renderTeethCards(detectionResults);
-
-        if (analysisReady) {
-            overlayToggleBtn.style.display = 'flex';
-            overlayBadge.classList.add('visible');
-            overlayBadgeText.textContent = `${data.count} tespit hazır`;
-            keyboardHint.style.display = 'block';
-            
-            // Analiz biter bitmez otomatik olarak tespitleri göster (Varsayılan Açık)
-            if (!overlayVisible) {
-                toggleOverlay();
-            }
-        }
-
+        renderOverlay();
+        renderArch();
+        updateToolbarState();
     } catch (err) {
-        detectionSummary.innerHTML = `⚠️ Hata: ${escapeHtml(err.message)}`;
-        detectionSummary.style.display = 'block';
+        showStatus(err.message, true);
     } finally {
-        detectBtn.disabled = false;
-        detectText.textContent = '🔍 20\'lik Dişleri Analiz Et';
-        spinner.style.display = 'none';
+        el.btnAnalyze.disabled = !state.file;
+        el.btnAnalyze.classList.remove('loading');
+        el.analyzeLabel.textContent = 'Yeniden analiz et';
     }
 }
 
-// --- Canvas Overlay Toggle ---
-function toggleOverlay() {
-    if (!analysisReady || !detectionResults.length) return;
-
-    overlayVisible = !overlayVisible;
-
-    if (overlayVisible) {
-        // Canvas'ı göster ve bbox'ları çiz
-        overlayCanvas.style.display = 'block';
-        drawBoxes();
-        overlayToggleBtn.classList.add('overlay-active');
-        overlayIcon.textContent = '🔲';
-        overlayText.textContent = 'Tespitleri Gizle';
-    } else {
-        // Canvas'ı temizle ve gizle — görüntüye dokunma
-        clearCanvas();
-        overlayToggleBtn.classList.remove('overlay-active');
-        overlayIcon.textContent = '👁';
-        overlayText.textContent = 'Tespitleri Göster';
-    }
+// ════════════════════════════════════════════════════════════════════════
+// SVG anotasyon katmanı (görüntü koordinatlarında, zoomla birlikte ölçeklenir)
+// ════════════════════════════════════════════════════════════════════════
+function svg(tag, attrs, parent) {
+    const node = document.createElementNS(SVG_NS, tag);
+    Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, v));
+    if (parent) parent.appendChild(node);
+    return node;
 }
 
+function renderOverlay() {
+    el.overlay.innerHTML = '';
+    const fs = Math.max(14, state.nat.w * 0.012);
 
+    state.detections.forEach((d, i) => {
+        const a = d.auto_analysis;
+        const [x1, y1, x2, y2] = d.bbox;
+        const w = x2 - x1;
+        const g = svg('g', { class: 'tooth', 'data-i': i }, el.overlay);
 
-// --- Keyboard Shortcuts ---
-function setupKeyboardShortcuts() {
-    document.addEventListener('keydown', (e) => {
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
-        switch (e.code) {
-            case 'Space':
-                e.preventDefault();
-                if (analysisReady) toggleOverlay();
-                break;
-            case 'Escape':
-                if (uploadedFile) clearImage();
-                break;
+        svg('line', { class: 'occl', x1: x1 - w * 0.5, x2: x2 + w * 0.5, y1: a.occlusal_y, y2: a.occlusal_y }, g);
+        svg('rect', {
+            class: 'box' + (d.confidence < LOW_DET_CONF ? ' low' : ''),
+            x: x1, y: y1, width: w, height: y2 - y1, rx: fs * 0.25,
+        }, g);
+        if (a.tooth_axis) {
+            const [[rx, ry], [cx, cy]] = a.tooth_axis;
+            svg('line', { class: 'axis', x1: rx, y1: ry, x2: cx, y2: cy }, g);
+            svg('circle', { class: 'crown', cx, cy, r: fs * 0.32 }, g);
         }
+
+        const label = toothLabel(i);
+        const tag = svg('g', { class: 'tag' }, g);
+        const tw = fs * (0.62 * label.length + 0.9);
+        svg('rect', { x: x1, y: y1 - fs * 1.5, width: tw, height: fs * 1.35, rx: fs * 0.25 }, tag);
+        const t = svg('text', { x: x1 + fs * 0.45, y: y1 - fs * 0.48, 'font-size': fs }, tag);
+        t.textContent = label;
+    });
+
+    applyLayers();
+    highlightSelection();
+}
+
+function highlightSelection() {
+    el.overlay.querySelectorAll('.tooth').forEach(g => {
+        const i = +g.dataset.i;
+        g.classList.toggle('selected', i === state.selected);
+        g.classList.toggle('dim', state.selected >= 0 && i !== state.selected);
     });
 }
 
-// --- Confidence Helpers ---
-function getConfClass(conf) {
-    if (conf >= 0.70) return 'conf-high';
-    if (conf >= 0.45) return 'conf-medium';
-    return 'conf-low';
+function toothLabel(i) {
+    const fdi = state.detections[i].auto_analysis.fdi;
+    const dup = state.detections.filter(d => d.auto_analysis.fdi === fdi).length > 1;
+    return dup ? `${fdi}·${i + 1}` : String(fdi);
 }
 
-function getConfLabel(conf) {
-    const pct = Math.round(conf * 100);
-    if (conf >= 0.70) return `✓ %${pct}`;
-    if (conf >= 0.45) return `~ %${pct}`;
-    return `⚠ %${pct}`;
+// ════════════════════════════════════════════════════════════════════════
+// Çene haritası (FDI)
+// ════════════════════════════════════════════════════════════════════════
+function renderArch() {
+    const map = $('archMap');
+    map.innerHTML = '';
+    // Panoramikte oklüzal düzlem "gülümseme" eğrisidir: ortada aşağıda, uçlarda yukarıda
+    const cx = 130, pitch = 14.5, tw = 12, th = 16;
+    const smile = dx => 22 * (1 - (dx / 116) ** 2);
+    const upperY = 34, lowerY = 54;   // alt sıra = üst sıra + diş boyu + aralık
+    const upper = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28];
+    const lower = [48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
+
+    const occlY = upperY + th + 2;
+    svg('path', { class: 'gum', d: `M6 ${occlY + smile(124)} Q130 ${occlY + 2 * smile(0)} 254 ${occlY + smile(124)}` }, map);
+    const side = (x, txt, anchor) => {
+        const t = svg('text', { class: 'side', x, y: 10, 'text-anchor': anchor }, map);
+        t.textContent = txt;
+    };
+    side(4, 'HASTA SAĞI', 'start');
+    side(256, 'HASTA SOLU', 'end');
+
+    const found = {};
+    state.detections.forEach((d, i) => {
+        const f = d.auto_analysis.fdi;
+        if (!(f in found)) found[f] = i;
+    });
+
+    [[upper, upperY, -1], [lower, lowerY, 1]].forEach(([row, baseY, dir]) => {
+        row.forEach((num, k) => {
+            const dx = (k - 7.5) * pitch;
+            const x = cx + dx - tw / 2;
+            const y = baseY + smile(dx);
+            const isWisdom = num % 10 === 8;
+            if (!isWisdom) {
+                svg('rect', { class: 't', x, y, width: tw, height: th, rx: 3.5 }, map);
+                return;
+            }
+            const i = found[num];
+            const sev = i !== undefined ? state.teeth[i]?.result?.severity || '' : '';
+            const cls = ['w', i !== undefined ? 'found' : '', sev, i === state.selected && i !== undefined ? 'selected' : '']
+                .filter(Boolean).join(' ');
+            const node = svg('rect', { class: cls, x: x - 1, y: y - 1, width: tw + 2, height: th + 2, rx: 4 }, map);
+            if (i !== undefined) node.addEventListener('click', () => selectTooth(i));
+            const ny = dir < 0 ? y - 7 : y + th + 15;
+            const lbl = svg('text', { class: 'num' + (i !== undefined ? ' found' : ''), x: x + tw / 2, y: ny }, map);
+            lbl.textContent = num;
+        });
+    });
 }
 
-// --- Render Tooth Cards ---
-function renderTeethCards(detections) {
-    teethContainer.innerHTML = '';
-    if (!detections || detections.length === 0) {
-        noDetection.style.display = 'block';
-        teethContainer.appendChild(noDetection);
-        return;
-    }
-    noDetection.style.display = 'none';
-    detections.forEach((det, idx) => teethContainer.appendChild(createToothCard(det, idx)));
-    const first = teethContainer.querySelector('.tooth-card');
-    if (first) first.classList.add('open');
+// ════════════════════════════════════════════════════════════════════════
+// Diş sekmeleri ve detay paneli
+// ════════════════════════════════════════════════════════════════════════
+function renderTabs() {
+    const tabs = $('toothTabs');
+    tabs.innerHTML = '';
+    state.detections.forEach((d, i) => {
+        const b = document.createElement('button');
+        b.className = 'tooth-tab';
+        b.setAttribute('role', 'tab');
+        b.setAttribute('aria-selected', String(i === state.selected));
+        const sev = state.teeth[i].result?.severity || '';
+        b.innerHTML = `<span class="sev ${sev}"></span>`;
+        b.append(toothLabel(i));
+        b.addEventListener('click', () => selectTooth(i));
+        tabs.appendChild(b);
+    });
 }
 
-function createToothCard(det, idx) {
-    const card = document.createElement('div');
-    card.className = 'tooth-card';
-    card.id = `tooth-card-${idx}`;
-    const auto = det.auto_analysis;
-    const impConf = auto.impaction_confidence || 0.5;
-    const ramConf = auto.ramus_confidence || 0.5;
-    const depConf = auto.depth_confidence || 0.5;
-    card.innerHTML = `
-        <div class="tooth-card-header" onclick="toggleCard(${idx})">
-            <div class="tooth-info">
-                <div class="tooth-badge">${det.index}</div>
-                <div>
-                    <div class="tooth-label">${det.index}. Diş · ${escapeHtml(auto.jaw)}</div>
-                    <div class="tooth-confidence">Model Güveni: ${(det.confidence * 100).toFixed(1)}%</div>
-                </div>
-            </div>
-            <div class="tooth-auto-tags">
-                <span class="tag ${getConfClass(impConf)}">${auto.impaction}</span>
-                <span class="tag ${getConfClass(depConf)}">${auto.depth}</span>
-            </div>
-            <span class="tooth-chevron">▼</span>
-        </div>
-        <div class="tooth-card-body">
-            <div class="tooth-card-content">
-                <div class="auto-label">🤖 Otomatik Tespit</div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Gömülülük Açısı <span class="conf-indicator ${getConfClass(impConf)}">${getConfLabel(impConf)}</span></label>
-                        <select id="impaction-${idx}">${makeOptions(dropdownOptions.impaction, auto.impaction)}</select>
-                    </div>
-                    <div class="form-group">
-                        <label>Ramus İlişkisi <span class="conf-indicator ${getConfClass(ramConf)}">${getConfLabel(ramConf)}</span></label>
-                        <select id="ramus-${idx}">${makeOptions(dropdownOptions.ramus, auto.ramus)}</select>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>Gömülülük Derinliği <span class="conf-indicator ${getConfClass(depConf)}">${getConfLabel(depConf)}</span></label>
-                    <select id="depth-${idx}">${makeOptions(dropdownOptions.depth, auto.depth)}</select>
-                </div>
-                <div class="manual-label">✋ Manuel Giriş</div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Kök Formu</label>
-                        <select id="root-${idx}">${makeOptions(dropdownOptions.root)}</select>
-                    </div>
-                    <div class="form-group">
-                        <label>Sinir (IAN) Komşuluğu</label>
-                        <select id="nerve-${idx}">${makeOptions(dropdownOptions.nerve)}</select>
-                    </div>
-                </div>
-                <button class="analyze-btn" onclick="analyzeToothBtn(${idx})">⚡ Zorluk Skoru Hesapla</button>
-                <div class="score-result" id="score-result-${idx}"></div>
-            </div>
-        </div>`;
-    return card;
+function selectTooth(i) {
+    if (i < 0 || i >= state.detections.length) return;
+    state.selected = i;
+    renderTabs();
+    renderDetail();
+    highlightSelection();
+    renderArch();
 }
 
-function makeOptions(options, selectedValue) {
-    if (!options) return '';
-    return options.map(opt =>
-        `<option value="${opt}" ${opt === selectedValue ? 'selected' : ''}>${opt}</option>`
-    ).join('');
+function renderDetail() {
+    const i = state.selected;
+    const d = state.detections[i];
+    const a = d.auto_analysis;
+    const t = state.teeth[i];
+    const o = state.options;
+    const patientSide = (d.bbox[0] + d.bbox[2]) / 2 < state.nat.w / 2 ? 'hasta sağı' : 'hasta solu';
+
+    $('dFdi').textContent = a.fdi;
+    $('dTitle').textContent = `${a.jaw} · ${patientSide}`;
+    $('dSub').textContent = `Tespit güveni %${Math.round(d.confidence * 100)} · eksen ${a.angle_value}°`;
+
+    bindFinding('impaction', o.impaction, a.impaction_confidence);
+    bindFinding('depth', o.depth, a.depth_confidence);
+    bindFinding('ramus', o.ramus, a.ramus_confidence);
+
+    segmented('seg-root', o.root, t.root, v => updateTooth(i, 'root', v),
+        v => v === o.root[0] ? '' : 'risk-moderate');
+    segmented('seg-nerve', o.nerve, t.nerve, v => updateTooth(i, 'nerve', v),
+        v => v === o.nerve[0] ? '' : 'risk-major');
+
+    renderResult();
 }
 
-function toggleCard(idx) {
-    const card = $(`tooth-card-${idx}`);
-    if (card) card.classList.toggle('open');
+function bindFinding(key, options, conf) {
+    const i = state.selected;
+    const t = state.teeth[i];
+    const sel = $(`sel-${key}`);
+    sel.innerHTML = '';
+    options.forEach(opt => sel.add(new Option(opt, opt, false, opt === t[key])));
+    sel.onchange = () => {
+        t.edited[key] = true;
+        updateTooth(i, key, sel.value);
+        bindFinding(key, options, conf);
+    };
+
+    const box = $(`f-${key}`);
+    const edited = !!t.edited[key];
+    const review = !edited && conf < REVIEW_CONF;
+    sel.classList.toggle('edited', edited);
+    box.classList.toggle('review', review);
+    box.classList.toggle('good', !edited && !review);
+    box.querySelector('.conf-bar i').style.width = edited ? '100%' : `${Math.round(conf * 100)}%`;
+    box.querySelector('.conf-text').textContent = edited
+        ? 'Hekim tarafından düzeltildi'
+        : review ? `Düşük güven %${Math.round(conf * 100)} — kontrol edin`
+                 : `Güven %${Math.round(conf * 100)}`;
 }
 
-// --- Analyze Tooth ---
-async function analyzeToothBtn(idx) {
+function updateTooth(i, key, value) {
+    state.teeth[i][key] = value;
+    evaluate(i);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Pederson değerlendirmesi
+// ════════════════════════════════════════════════════════════════════════
+async function evaluate(i) {
+    const t = state.teeth[i];
+    if (!t) return;
     const body = {
-        gender: $('gender').value,
-        age: $('age').value,
-        mouth_opening: $('mouthOpening').value,
-        impaction: $(`impaction-${idx}`).value,
-        ramus: $(`ramus-${idx}`).value,
-        depth: $(`depth-${idx}`).value,
-        root: $(`root-${idx}`).value,
-        nerve: $(`nerve-${idx}`).value,
+        ...state.patient,
+        impaction: t.impaction, depth: t.depth, ramus: t.ramus, root: t.root, nerve: t.nerve,
     };
     try {
         const res = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         });
         const data = await res.json();
-        renderScore(idx, res.ok ? data : { error: data.error || 'Analiz başarısız.' });
+        t.result = res.ok ? data : { error: data.error || 'Değerlendirme başarısız.' };
     } catch (err) {
-        console.error('Analiz hatası:', err);
+        t.result = { error: err.message };
     }
+    if (state.teeth[i] !== t) return;  // bu arada yeni görüntü yüklendiyse
+    if (i === state.selected) renderResult();
+    renderTabs();
+    renderArch();
 }
 
-function renderScore(idx, data) {
-    const container = $(`score-result-${idx}`);
-    if (!container) return;
-    if (data.error) {
-        container.innerHTML = `<div class="score-recommendation">⚠️ ${escapeHtml(data.error)}</div>`;
-        container.style.display = 'block';
+function renderResult() {
+    const box = $('result');
+    const r = state.teeth[state.selected]?.result;
+    box.innerHTML = '';
+    if (!r) return;
+    if (r.error) {
+        box.innerHTML = `<div class="result-card"><span class="risk major">${escapeHtml(r.error)}</span></div>`;
         return;
     }
-    const sev = data.severity;
-    const pct = Math.round((data.pederson_index / data.pederson_max) * 100);
-    const rows = data.breakdown.map(b => `
-        <tr><td>${escapeHtml(b.factor)}</td><td>${escapeHtml(b.value)}</td><td class="pts">+${b.points}</td></tr>`).join('');
-    const risks = data.risk_factors.map(r => `
-        <span class="risk-chip ${r.level}">${escapeHtml(r.factor)}: ${escapeHtml(r.value)}</span>`).join('');
-    const notes = data.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('');
-    container.innerHTML = `
-        <div class="score-header">
-            <span class="score-value ${sev}">${data.pederson_index}<small>/${data.pederson_max}</small></span>
-            <span class="score-severity ${sev}">${escapeHtml(data.severity_label)}</span>
-        </div>
-        <div class="score-bar-container">
-            <div class="score-bar ${sev}" style="width: 0%"></div>
-        </div>
-        <table class="score-breakdown">
-            <caption>Pederson zorluk indeksi</caption>
-            ${rows}
-        </table>
-        ${risks ? `<div class="risk-chips">${risks}</div>` : ''}
-        ${notes ? `<ul class="score-notes">${notes}</ul>` : ''}
-        <div class="score-recommendation">${escapeHtml(data.recommendation)}</div>`;
-    container.style.display = 'block';
-    requestAnimationFrame(() => {
-        const bar = container.querySelector('.score-bar');
-        if (bar) bar.style.width = `${pct}%`;
+
+    const sev = r.severity;
+    const zone = n => (n <= 4 ? 'simple' : n <= 6 ? 'surgical' : 'advanced');
+    const cells = [];
+    const labels = [];
+    for (let n = 3; n <= 10; n++) {
+        cells.push(`<span class="z-${zone(n)}${n <= r.pederson_index ? ' on' : ''}"></span>`);
+        labels.push(`<span>${n}</span>`);
+    }
+    const rows = r.breakdown.map(b =>
+        `<tr><td>${escapeHtml(b.factor)}</td><td>${escapeHtml(b.value)}</td><td class="pts">+${b.points}</td></tr>`).join('');
+    const risks = r.risk_factors.map(f =>
+        `<span class="risk ${f.level}">${escapeHtml(f.factor)}: ${escapeHtml(f.value)}</span>`).join('');
+    const notes = r.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('');
+
+    // Öneri metninin ilk bloğu: başlık + açıklama (klinik notlar risk etiketlerinde zaten var)
+    const [head, ...rest] = r.recommendation.split('\n\n')[0].split('\n');
+    const headText = head.replace(/^[^\p{L}]+/u, '');
+
+    box.innerHTML = `
+        <div class="result-card">
+            <div class="result-top">
+                <div>
+                    <div class="result-index ${sev}">${r.pederson_index}<small>/${r.pederson_max}</small></div>
+                    <div class="result-caption">Pederson zorluk indeksi</div>
+                </div>
+                <span class="sev-chip ${sev}">${escapeHtml(r.severity_label)}</span>
+            </div>
+            <div class="scale" aria-hidden="true">${cells.join('')}</div>
+            <div class="scale-labels" aria-hidden="true">${labels.join('')}</div>
+            <table class="breakdown">${rows}</table>
+            ${risks ? `<div class="risks">${risks}</div>` : ''}
+            ${notes ? `<ul class="notes">${notes}</ul>` : ''}
+            <div class="recommendation"><b>${escapeHtml(headText)}</b>\n${escapeHtml(rest.join('\n'))}</div>
+        </div>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Yardımcılar
+// ════════════════════════════════════════════════════════════════════════
+function bindKeyboard() {
+    document.addEventListener('keydown', e => {
+        if (e.target.closest('input, select, textarea')) return;
+        if (!state.imgURL) return;
+        switch (e.key) {
+            case ' ':
+                if (e.target.closest('button')) return;
+                e.preventDefault();
+                state.layersHidden = !state.layersHidden;
+                applyLayers();
+                break;
+            case 'i': case 'I': toggleInvert(); break;
+            case '+': case '=': zoomAtCenter(1.25); break;
+            case '-': zoomAtCenter(0.8); break;
+            case '0': fitView(); break;
+            case 'Escape': clearImage(); break;
+        }
     });
+}
+
+function showStatus(msg, isError = false) {
+    el.stageStatus.textContent = msg;
+    el.stageStatus.classList.toggle('error', isError);
+    el.stageStatus.hidden = false;
+}
+
+function hideStatus() {
+    el.stageStatus.hidden = true;
 }
 
 function escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = text ?? '';
     return div.innerHTML;
 }
