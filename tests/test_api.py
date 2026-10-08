@@ -77,3 +77,9 @@ def test_analyze_rejects_unknown_option(client):
 def test_admin_requires_token(client):
     assert client.get("/api/admin/images").status_code == 401
     assert client.get("/api/admin/images", headers={"X-Admin-Token": "test-token"}).status_code == 200
+
+
+def test_pages_are_not_served_stale(client):
+    # Eski HTML + yeni JS karışımı etiketleme sayfasını bozuyordu
+    for path in ("/", "/label", "/static/label.js"):
+        assert client.get(path).headers.get("cache-control") == "no-cache"

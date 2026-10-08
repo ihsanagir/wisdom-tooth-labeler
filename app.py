@@ -92,6 +92,20 @@ async def basic_auth_middleware(request: Request, call_next):
     )
 
 
+@app.middleware("http")
+async def no_stale_frontend(request: Request, call_next):
+    """
+    Sayfalar ve static dosyalar her açılışta sunucuya doğrulatılır (ETag ile ucuz).
+    Aksi halde tarayıcı eski HTML'i önbellekten verip yeni JS ile eşleştiriyor ve
+    sayfa bozuluyordu (ör. etiketleme sayfasında null.querySelectorAll).
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/", "/label", "/admin") or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 def _check_admin(token: str) -> bool:
     return bool(ADMIN_TOKEN) and secrets.compare_digest(token or "", ADMIN_TOKEN)
 
